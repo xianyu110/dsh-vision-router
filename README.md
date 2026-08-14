@@ -60,7 +60,7 @@ Then just paste an image into a conversation. The agent mounts the vision tools 
 - **Automatic failover with classified errors.** Region blocks, ToS filtering, 402 quota, 429 rate limits (with Retry-After backoff), context overflow, network failures — the chain walks providers one by one and only reports after all of them failed, with actionable advice.
 - **Image memory.** Vision answers are cached by attachment content hash; later text turns substitute the recorded description (marked as untrusted evidence), so DeepSeek genuinely remembers earlier images without re-spending vision calls.
 - **A verifiable pixel loop.** Reference → `vision_html_screenshot` → `vision_pixel_diff` (ratio + red heatmap + worst-region ranking) → fix → repeat until the diff reaches zero. UI restoration becomes measurable instead of eyeballed.
-- **Progressive schema exposure.** Only a zero-arg `vision_activate` bootstrap is always visible; image turns auto-mount all ten deep tools with a one-time usage note, and a `vision-tools` skill is registered for text-only turns.
+- **Progressive schema exposure.** Only a zero-arg `vision_activate` bootstrap is always visible; image turns auto-mount all eleven deep tools with a one-time usage note, and a `vision-tools` skill is registered for text-only turns.
 - **Selective proxy.** Only the configured vision provider hosts go through your local proxy; DeepSeek stays direct.
 
 ## How it works
@@ -73,7 +73,7 @@ The vision model is **only the eyes**; DeepSeek is **always the brain**. An imag
 
 ## Tools
 
-All ten deep tools mount automatically on image turns (`autoActivateOnImage`); text turns can mount them via `vision_activate` or the `/vision-tools` skill. Built on sharp / potrace / tesseract / system Chrome — no Python:
+All eleven deep tools mount automatically on image turns (`autoActivateOnImage`); text turns can mount them via `vision_activate` or the `/vision-tools` skill. Built on sharp / potrace / tesseract / system Chrome — no Python:
 
 <p align="center">
   <img src="assets/vision-tools.svg" width="100%" alt="Nine vision tools available in DSH Vision Router." />
@@ -91,6 +91,7 @@ All ten deep tools mount automatically on image turns (`autoActivateOnImage`); t
 | `vision_trace` | SVG vectorization (potrace posterization; icons/logos) | SVG |
 | `vision_extract_foreground` | Cutout via border flood fill (uniform backgrounds) | transparent PNG |
 | `vision_html_screenshot` | Screenshot a local HTML file (headless system Chrome) | PNG |
+| `vision_inspect_dom` | DOM facts + computed-style highlights + a11y data + pixel boxes for a CSS selector (headless Chrome, no extension) | optional viewport PNG |
 
 Formats are sniffed from magic bytes, so extensionless content-addressed attachment files work everywhere (no `.png` renaming needed).
 
@@ -107,6 +108,7 @@ vision_colors image="ref.png" top=8
 vision_trace image="icon.png" steps=4
 vision_extract_foreground image="logo.png"
 vision_html_screenshot source="page.html" width=1200 height=720
+vision_inspect_dom source="page.html" selector=".card button"
 ```
 
 ## Provider fallback chain

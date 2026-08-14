@@ -60,7 +60,7 @@ dsh plugin --profile web add github:ysr666/dsh-vision-router
 - **自动降级 + 分类报错。** 地区限制、ToS 风控、402 额度、429 限流（尊重 Retry-After 退避重试）、上下文超长、网络故障——链路逐供应商尝试，全部失败才报错并给出可操作的建议。
 - **图片记忆。** 视觉答案按附件内容哈希缓存；后续文字轮用记录的描述替换历史图片（标注为不可信证据），DeepSeek 真正“记得”之前发过的图，且不重复消耗视觉调用。
 - **可验证的像素闭环。** 参照图 → `vision_html_screenshot` → `vision_pixel_diff`（差异率 + 红色热力图 + 最差区域排行）→ 修复 → 再对比，直到差异归零。UI 还原从“目测”变成“实测”。
-- **渐进式 schema 暴露。** 平时只有一个零参引导工具 `vision_activate`；图片轮自动挂载全部 10 个深看工具（附一次性使用提示），并为纯文字轮注册 `vision-tools` 技能。
+- **渐进式 schema 暴露。** 平时只有一个零参引导工具 `vision_activate`；图片轮自动挂载全部 11 个深看工具（附一次性使用提示），并为纯文字轮注册 `vision-tools` 技能。
 - **选择性代理。** 只有配置的视觉供应商域名走本地代理；DeepSeek 保持直连。
 
 ## 工作原理
@@ -73,7 +73,7 @@ dsh plugin --profile web add github:ysr666/dsh-vision-router
 
 ## 工具
 
-10 个深看工具在图片轮自动挂载（`autoActivateOnImage`）；文字轮可通过 `vision_activate` 或 `/vision-tools` 技能挂载。全部基于 sharp / potrace / tesseract / 系统 Chrome——无 Python：
+11 个深看工具在图片轮自动挂载（`autoActivateOnImage`）；文字轮可通过 `vision_activate` 或 `/vision-tools` 技能挂载。全部基于 sharp / potrace / tesseract / 系统 Chrome——无 Python：
 
 <p align="center">
   <img src="assets/vision-tools-zh.svg" width="100%" alt="DSH Vision Router 的 10 个视觉工具。" />
@@ -91,6 +91,7 @@ dsh plugin --profile web add github:ysr666/dsh-vision-router
 | `vision_trace` | SVG 矢量化（potrace 分色；图标/logo） | SVG |
 | `vision_extract_foreground` | 边界洪泛抠图（纯色背景） | 透明 PNG |
 | `vision_html_screenshot` | 给本地 HTML 文件截图（无头系统 Chrome） | PNG |
+| `vision_inspect_dom` | 按 CSS 选择器抓 DOM 事实 + 计算样式要点 + 无障碍数据 + 视图像素框（无头 Chrome，无需扩展） | 可选视口截图 PNG |
 
 图片格式按**魔数识别**，无扩展名的内容寻址附件文件也能直接用（不用再复制成 `.png`）。
 
@@ -107,6 +108,7 @@ vision_colors image="ref.png" top=8
 vision_trace image="icon.png" steps=4
 vision_extract_foreground image="logo.png"
 vision_html_screenshot source="page.html" width=1200 height=720
+vision_inspect_dom source="page.html" selector=".card button"
 ```
 
 ## 供应商降级链
