@@ -2546,6 +2546,25 @@ export function apply(ctx, config = {}) {
       return `${base || 'image'}-${suffix}`
     }
 
+    // fs.resolve() returns an opaque FsTarget, NOT a filesystem path: opening
+    // it in Chrome needs fileUrl()/processPath(), and existence is stat().
+    const resolveLocalFile = async (fsService, exec, source, toolName) => {
+      const cwd = workspaceOf(exec)
+      const target = await fsService.resolve(source, {
+        cwd,
+        ...(exec && exec.signal !== undefined ? { signal: exec.signal } : {}),
+      })
+      const info = await fsService.stat(target, exec && exec.signal)
+      if (info === undefined) {
+        throw new Error(`${toolName}: file not found: ${target.displayPath ?? source}`)
+      }
+      if (info.type !== undefined && info.type !== 'file') {
+        throw new Error(`${toolName}: not a regular file: ${target.displayPath ?? source}`)
+      }
+      const fileUrl = await fsService.fileUrl(target)
+      return { fileUrl, displayPath: target.displayPath ?? source }
+    }
+
     const stringOutput = {
       schema: { type: 'string' },
       render: (_args, value) => [{ type: 'text', text: value }],
@@ -3020,10 +3039,12 @@ export function apply(ctx, config = {}) {
         if (fsService === undefined) {
           throw new Error('vision_html_screenshot: the fs service is not available')
         }
-        const targetPath = await fsService.resolve(source)
-        if (!existsSync(targetPath)) {
-          throw new Error(`vision_html_screenshot: file not found: ${source}`)
-        }
+        const { fileUrl, displayPath } = await resolveLocalFile(
+          fsService,
+          exec,
+          source,
+          'vision_html_screenshot',
+        )
         let puppeteer
         try {
           puppeteer = await import('puppeteer-core')
@@ -3051,10 +3072,10 @@ export function apply(ctx, config = {}) {
         try {
           const page = await browser.newPage()
           await page.setViewport({ width, height })
-          await page.goto(pathToFileURL(targetPath).href, { waitUntil: 'networkidle0', timeout: 30000 })
+          await page.goto(fileUrl, { waitUntil: 'networkidle0', timeout: 30000 })
           const png = await page.screenshot({ type: 'png' })
           const target = await saveArtifact(exec, `${artifactStem(source, `shot-${width}x${height}`)}.png`, png)
-          return JSON.stringify({ path: target, width, height, bytes: png.length })
+          return JSON.stringify({ path: target, source: displayPath, width, height, bytes: png.length })
         } finally {
           await browser.close()
         }
@@ -3094,10 +3115,12 @@ export function apply(ctx, config = {}) {
         if (fsService === undefined) {
           throw new Error('vision_inspect_dom: the fs service is not available')
         }
-        const targetPath = await fsService.resolve(source)
-        if (!existsSync(targetPath)) {
-          throw new Error(`vision_inspect_dom: file not found: ${source}`)
-        }
+        const { fileUrl, displayPath } = await resolveLocalFile(
+          fsService,
+          exec,
+          source,
+          'vision_inspect_dom',
+        )
         let puppeteer
         try {
           puppeteer = await import('puppeteer-core')
@@ -3127,7 +3150,7 @@ export function apply(ctx, config = {}) {
         try {
           const page = await browser.newPage()
           await page.setViewport({ width, height })
-          await page.goto(pathToFileURL(targetPath).href, { waitUntil: 'networkidle0', timeout: 30000 })
+          await page.goto(fileUrl, { waitUntil: 'networkidle0', timeout: 30000 })
           const result = await page.evaluate(
             (sel, cap) => {
               const buildSelector = (el) => {
@@ -3185,7 +3208,7 @@ export function apply(ctx, config = {}) {
             screenshotPath = await saveArtifact(exec, `${artifactStem(source, `dom-${width}x${height}`)}.png`, png)
           }
           return JSON.stringify({
-            source: targetPath,
+            source: displayPath,
             title: result.title,
             selector,
             width,
@@ -3210,7 +3233,7 @@ export function apply(ctx, config = {}) {
         '视觉深看工具已挂载：vision_describe（看图问答）、vision_ground（像素定位）、vision_detect（元素清单）、' +
         'vision_crop（裁剪放大）、vision_pixel_diff（像素对比验证）、vision_colors（取色）、' +
         'vision_ocr（文字识别）、vision_trace（SVG 矢量化）、vision_extract_foreground（抠图）、' +
-        'vision_html_screenshot（页面截图）。现在可以直接调用它们。'
+        'vision_html_screenshot（页面截图）、vision_inspect_dom（DOM 检查）。现在可以直接调用它们。'
       )
     }
     if (progressive) {
