@@ -225,3 +225,13 @@ This removes the dependency and the bundle layer. If you disabled the stock Deep
 ## License
 
 [LGPL-3.0](LICENSE)
+
+<!-- star-history-chart -->
+## Star History
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ysr666/dsh-vision-router/star-history/assets/star-history/star-history-dark.svg">
+    <img alt="Star history chart" src="https://raw.githubusercontent.com/ysr666/dsh-vision-router/star-history/assets/star-history/star-history-light.svg" width="100%">
+  </picture>
+</p>
