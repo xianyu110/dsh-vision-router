@@ -42,6 +42,18 @@
   <img src="assets/vision-demo.gif" width="640" alt="Demo: paste an image, the agent locates the send button with vision_ground / vision_crop / vision_pixel_diff and answers with coordinates" />
 </p>
 
+## Contents
+
+- [Why this exists](#why-this-exists)
+- [How it compares](#how-it-compares)
+- [Quick start](#quick-start)
+- [Highlights](#highlights)
+- [How it works](#how-it-works)
+- [Tools](#tools)
+- [Configuration](#configuration)
+- [Install and lifecycle](#install-and-lifecycle)
+- [Troubleshooting](#troubleshooting)
+
 ## Why this exists
 
 Most DSH vision plugins bridge images to DeepSeek as *text descriptions* — lossy, one-shot, and blind to pixels. This plugin keeps the **original pixels on the vision model's side** and DeepSeek on the reasoning side, and makes looking at an image an **ordinary tool call**:
@@ -72,13 +84,12 @@ Both are MIT-licensed and one command away. Pick this plugin when you want image
 
 ## Quick start
 
-### 1. Install and load the plugin
+### 1. Install the plugin
 
-Recommended for normal npm/npx installs (the same launch style used by the DSH README):
+For normal npm/npx installs, installation is a single command:
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
-npx @deepseek-ai/dsh web
 ```
 
 If you run DeepSeek Harness from a source checkout with pnpm, use the workspace script instead — `dsh` is not necessarily on your shell `PATH`:
@@ -86,10 +97,9 @@ If you run DeepSeek Harness from a source checkout with pnpm, use the workspace 
 ```sh
 cd deepseek-harness
 pnpm dsh plugin --profile web add dsh-vision-router
-pnpm dsh web
 ```
 
-If you already installed the DSH CLI globally and `dsh` is on `PATH`, the shorter `dsh ...` form works too.
+If you already installed the DSH CLI globally and `dsh` is on `PATH`, the shorter `dsh ...` form works too. After installation, start or reload DSH Web as you normally do.
 
 > [!NOTE]
 > If you install the plugin **into a Web process that was already running long-term**, let that DSH Web process reload once so the plugin bundle itself is discovered. After the plugin is loaded, adding/removing models or changing wrapper scope **hot-updates without further DSH restarts**.
@@ -288,18 +298,23 @@ Everything is optional; defaults work out of the box. Edit via the Web card or a
 
 ### Install
 
-Normal npm/npx install:
+Normal npm/npx install — one command:
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
-npx @deepseek-ai/dsh --profile web --dump-config | grep vision-router
 ```
 
 From a DeepSeek Harness source checkout:
 
 ```sh
 pnpm dsh plugin --profile web add dsh-vision-router
-pnpm dsh --profile web --dump-config | grep vision-router
+```
+
+Optional verification:
+
+```sh
+npx @deepseek-ai/dsh --profile web --dump-config | grep vision-router
+# source checkout: pnpm dsh --profile web --dump-config | grep vision-router
 ```
 
 When first adding the plugin to an already long-lived Web profile, let that Web process reload the plugin bundle; the host discovers the browser bundle through `dsh.client` at startup. **After the plugin is loaded, model-catalog and wrapper-scope changes hot-update and do not require a restart.**

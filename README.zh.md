@@ -42,6 +42,18 @@
   <img src="assets/vision-demo.gif" width="640" alt="演示：粘贴图片，Agent 用 vision_ground / vision_crop / vision_pixel_diff 定位发送按钮并给出坐标" />
 </p>
 
+## 目录
+
+- [为什么做这个](#为什么做这个)
+- [对比同类插件](#对比同类插件)
+- [快速开始](#快速开始)
+- [亮点](#亮点)
+- [工作原理](#工作原理)
+- [工具](#工具)
+- [配置项](#配置项)
+- [安装与生命周期](#安装与生命周期)
+- [故障排查](#故障排查)
+
 ## 为什么做这个
 
 大多数 DSH 视觉插件把图片“翻译”成一段文字描述再喂给 DeepSeek——有损、一次性、看不见像素。本插件把**原图像素留在视觉模型侧**、把推理留在 DeepSeek 侧，并把“看图”变成一次**普通的工具调用**：
@@ -72,13 +84,12 @@
 
 ## 快速开始
 
-### 1. 安装并让插件加载
+### 1. 安装插件
 
-普通 npm / npx 安装方式推荐这样用（与 DSH 官方 README 的启动方式一致）：
+普通 npm / npx 安装只需要一条命令：
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
-npx @deepseek-ai/dsh web
 ```
 
 如果你是从 DeepSeek Harness 源码仓库通过 pnpm 运行，`dsh` 不一定在系统 `PATH` 里，请改用工作区脚本：
@@ -86,10 +97,9 @@ npx @deepseek-ai/dsh web
 ```sh
 cd deepseek-harness
 pnpm dsh plugin --profile web add dsh-vision-router
-pnpm dsh web
 ```
 
-如果你已经全局安装 DSH CLI，并且终端里能直接执行 `dsh`，也可以继续使用较短的 `dsh ...` 写法。
+如果你已经全局安装 DSH CLI，并且终端里能直接执行 `dsh`，也可以继续使用较短的 `dsh ...` 写法。安装完成后，按你平时的方式启动或重新加载 DSH Web 即可。
 
 > [!NOTE]
 > 如果你是把插件**首次安装进一个已经长期运行的 Web 进程**，需要让 DSH Web 进程重新加载一次插件本体。插件加载完成后，新增/删除模型、修改自动识图包装范围都会**热更新，无需再重启 DSH**。
@@ -288,18 +298,23 @@ Web 配置页在 **设置 → 插件 → 插件配置** 下注册「视觉路由
 
 ### 安装
 
-普通 npm / npx 安装：
+普通 npm / npx 安装——一条命令：
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
-npx @deepseek-ai/dsh --profile web --dump-config | grep vision-router
 ```
 
 从 DeepSeek Harness 源码仓库运行：
 
 ```sh
 pnpm dsh plugin --profile web add dsh-vision-router
-pnpm dsh --profile web --dump-config | grep vision-router
+```
+
+可选验证：
+
+```sh
+npx @deepseek-ai/dsh --profile web --dump-config | grep vision-router
+# 源码仓库：pnpm dsh --profile web --dump-config | grep vision-router
 ```
 
 首次把插件装进已经长期运行的 Web profile 时，需要让 Web 进程重新加载插件本体；宿主在启动时通过 `dsh.client` 声明发现浏览器端包。**插件加载完成后，模型目录与包装范围的变化会热更新，不需要为这些变化重启。**
