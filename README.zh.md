@@ -329,16 +329,17 @@ npx @deepseek-ai/dsh --profile web --dump-config | grep vision-router
 ### 升级
 
 ```sh
-# 普通 npm / npx 安装
-npx @deepseek-ai/dsh plugin --profile web update dsh-vision-router
+# 普通 npm / npx 安装 —— 显式安装目标版本；裸 `update` 会被 pnpm v11
+# 静默拦下发布不足 24 小时的新版本
+npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router@<版本号>
 
 # DeepSeek Harness 源码仓库
-pnpm dsh plugin --profile web update dsh-vision-router
+pnpm dsh plugin --profile web add dsh-vision-router@<版本号>
 ```
 
-设置存放在 profile 的设置提供方里，升级不丢失。
+设置存放在 profile 的设置提供方里，升级不丢失。设置卡里的一键更新会自动显式安装 registry 已确认的版本，并在命令结束后核对实际安装版本——绝不只凭包管理器退出码就报成功。
 
-> **新版本一直不生效（`downloaded 0` / `added 0`）：** pnpm v11 会拦下发布不足 24 小时的版本；运行 `npx dsh-vision-router repair` 修复过期的带版本号豁免条目后，更新立即生效。
+> **新版本一直不生效（`downloaded 0` / `added 0`）：** pnpm v11 会拦下发布不足 24 小时的版本；按上面方式显式安装目标版本（pnpm 会自动写入豁免），或运行 `npx dsh-vision-router repair` 修复过期的带版本号豁免条目后，更新立即生效。
 
 > **从 bundle 补丁之前（v0.x）升级：** 现在插件由自带的 bundle 补丁自动挂载，
 > 若 `~/.dsh/profiles/<profile>/cordis.patch.yml` 里还残留旧版手动行，会与之

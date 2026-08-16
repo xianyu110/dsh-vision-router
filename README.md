@@ -329,16 +329,17 @@ Set it back to `false` to re-enable. Unloading removes the wrapper routes, tools
 ### Upgrade
 
 ```sh
-# normal npm/npx install
-npx @deepseek-ai/dsh plugin --profile web update dsh-vision-router
+# normal npm/npx install — install the version you want explicitly; a bare
+# `update` is silently held back for releases younger than 24h (pnpm v11)
+npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router@<version>
 
 # DeepSeek Harness source checkout
-pnpm dsh plugin --profile web update dsh-vision-router
+pnpm dsh plugin --profile web add dsh-vision-router@<version>
 ```
 
-Settings live in the profile's settings provider and survive upgrades.
+Settings live in the profile's settings provider and survive upgrades. The settings card's one-click update installs the registry-confirmed version explicitly and verifies the installed manifest afterwards — it never reports success on a package-manager exit code alone.
 
-> **A fresh release does not take effect (`downloaded 0` / `added 0`):** pnpm v11 holds versions younger than 24h back; `npx dsh-vision-router repair` fixes the stale version-pinned profile exemption so updates take effect immediately.
+> **A fresh release does not take effect (`downloaded 0` / `added 0`):** pnpm v11 holds versions younger than 24h back; install the target version explicitly as above (pnpm auto-exempts it), or `npx dsh-vision-router repair` fixes the stale version-pinned profile exemption so updates take effect immediately.
 
 > **Upgrading from a pre-bundle-patch install (v0.x):** the package now mounts
 > itself through its own bundle patch, so a leftover manual row in
