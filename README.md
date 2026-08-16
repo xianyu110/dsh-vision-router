@@ -40,6 +40,7 @@
 
 - [Why this exists](#why-this-exists)
 - [How it compares](#how-it-compares)
+- [Acknowledgements](#acknowledgements)
 - [Quick start](#quick-start)
 - [Highlights](#highlights)
 - [How it works](#how-it-works)
@@ -61,20 +62,41 @@ Most DSH vision plugins bridge images to DeepSeek as *text descriptions* — los
 
 ## How it compares
 
-The closest alternative is [@anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) (Anionex), a native DSH bundle of the well-known `agent-vision-toolkit` lineage. Both packages ship a `vision-tools` skill and a family of pixel-level tools; they differ in philosophy — **zero-config paste-and-go** versus **agent-driven visual engineering**:
+**One-line take**: most dsh vision plugins turn images into *text descriptions* for DeepSeek
+(description bridge — lossy); this plugin hands the image turn *straight to a vision model*
+(routing bridge — pixel-faithful), with a built-in keyless free fallback.
 
-| | dsh-vision-router | @anionex/dsh-vision-toolkit |
+| | Manual model switching | MCP vision bridge | dsh-vision-router |
+|---|---|---|---|
+| Pixel fidelity | ✅ full (when switched) | ❌ text description only | ✅ full, on the image turn |
+| Automatic | ❌ | ✅ | ✅ |
+| Daily model untouched | ❌ (whole session swapped) | ✅ | ✅ |
+| Provider failure recovery | ❌ | ❌ | ✅ fallback chains |
+| Reusable structured queries | — | partial | ✅ JSON mode + caching |
+| Free out-of-the-box | ❌ | ❌ | ✅ built-in keyless endpoint |
+| Fits dsh composition | — | external server | ✅ one plugin row |
+
+**Difference from existing dsh community projects** (all excellent, each with its own focus):
+
+| Project | Approach | What this plugin adds |
 |---|---|---|
-| Image Q&A out of the box | ✅ Built-in free chain (anonymous OVHcloud endpoint) — no account, no key | Requires your own vision API key (local pixel tools work without one) |
-| Runtime | ✅ Node only — no Python | Python 3.11+ managed runtime |
-| Getting an image in | ✅ Pick a “+ Auto Vision” group once, then paste directly | Workspace path + `/vision-tools` command, then explicit tool calls |
-| Turn routing | ✅ Image turns switch to vision, text turns switch back to DeepSeek — optional stealth takeover keeps the model picker looking stock | Tool-driven; no whole-turn auto-routing |
-| Profiles | Web | Web + Headless |
-| Playbooks | The pixel loop: ground → crop → diff → fix → screenshot again | Richer case library (long-screenshot OCR, UI restoration, GUI automation) |
-| Tests | 144 | 162 |
-| Install | One command | One command (npm) |
+| [dsh-vision-sidecar](https://github.com/121103qwq/dsh-vision-sidecar) | Pre-describes images with an external VLM; the description joins the session as a message to DeepSeek; OVHcloud anonymous endpoint by default | Description bridge; this plugin adds raw-image routing, with `vision_describe` covering descriptions on demand |
+| [dsh-vision-proxy](https://github.com/Flyvhidbwo/dsh-vision-proxy) | Wraps a provider route and transcribes images into text in the request stream | Transcription bridge; this plugin wraps no provider — it rewrites routing through `agent/request` waterfalls |
+| [dsh-vision-provider](https://github.com/libinyam/dsh-vision-provider) | Config-only bundle registering an OpenAI-compatible multimodal route | Same config-layer idea; this plugin adds automatic routing, fallback chains and tools on top |
+| [modlens](https://github.com/liustack/modlens) | The first dsh vision plugin; reuses local Codex/OpenCode/Pi logins as vision engines | Engine-reuse idea; this plugin ships its own provider chain and depends on no other local CLI |
+| [dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) | Ten intent-aware visual tools (Q&A/OCR/pixel verification/UI restoration) | Broader tool set; this plugin focuses on routing + one general comparison tool, lighter |
+| [dsh-tool-vision](https://github.com/Scorp1o117/dsh-tool-vision) | An `inspect_image` tool plus an `llm/stream` waterfall image bridge | Similar waterfall bridge; this plugin adds turn routing, fallback chains, caching and the free endpoint |
 
-Both are MIT-licensed and one command away. Pick this plugin when you want images to *just work* with zero setup; pick theirs when you need headless profiles or the extended playbook library. (Feature comparison reflects their README as of 2026-08.)
+## Acknowledgements
+
+This project borrows ideas from all of the above — especially the keyless free-endpoint
+discovery (OVHcloud AI Endpoints anonymous tier) by
+[dsh-vision-sidecar](https://github.com/121103qwq/dsh-vision-sidecar). Thanks to the authors of
+[dsh-vision-proxy](https://github.com/Flyvhidbwo/dsh-vision-proxy),
+[dsh-vision-provider](https://github.com/libinyam/dsh-vision-provider),
+[modlens](https://github.com/liustack/modlens),
+[dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit), and
+[dsh-tool-vision](https://github.com/Scorp1o117/dsh-tool-vision).
 
 ## Quick start
 
