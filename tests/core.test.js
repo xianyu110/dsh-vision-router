@@ -1602,6 +1602,10 @@ test('twin wrapper re-injects the last explicit reasoningEffort on later steps (
   assert.equal(calls[1].reasoningEffort, 'max')
   assert.equal(calls[2].reasoningEffort, 'off')
   assert.equal(calls[3].reasoningEffort, 'off')
+  // the memory is scoped per provider+model: a second model on the same
+  // twin must not inherit the first model's remembered effort
+  await drain({ provider: 'opencode-go-vision', model: 'other', messages: [] })
+  assert.equal(calls[4].reasoningEffort, undefined)
 })
 
 test('twin wrapper leaves the effort untouched when nothing was seen or configured', async () => {

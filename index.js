@@ -1960,7 +1960,7 @@ export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, pr
   // re-inject it when a later call arrives without one, so every step keeps
   // the user's chosen level. The vision chain never flows through this body
   // and keeps its own reasoningEffort: undefined.
-  const lastReasoningEffort = new Map() // delegate provider -> last explicit effort
+  const lastReasoningEffort = new Map() // "provider\0model" -> last explicit effort
   return {
     async *stream(options) {
       const messages = options.messages ?? []
@@ -2015,13 +2015,18 @@ export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, pr
         })
         return result.changed ? { ...message, content: result.content } : message
       })
+      // Remember per delegate+model rather than per delegate alone: the
+      // stream boundary carries no session id, so provider+model is the
+      // narrowest scope available and keeps two concurrent sessions on the
+      // same twin from sharing one memory slot.
+      const effortKey = `${delegateProvider}\u0000${options.model ?? ''}`
       let effort = typeof options.reasoningEffort === 'string' && options.reasoningEffort !== ''
         ? options.reasoningEffort
         : undefined
       if (effort !== undefined) {
-        lastReasoningEffort.set(delegateProvider, effort)
+        lastReasoningEffort.set(effortKey, effort)
       } else {
-        effort = lastReasoningEffort.get(delegateProvider)
+        effort = lastReasoningEffort.get(effortKey)
       }
       yield* ctx.llm.stream({
         ...(effort === undefined ? options : { ...options, reasoningEffort: effort }),
