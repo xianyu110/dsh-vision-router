@@ -295,8 +295,26 @@ test('the walkthrough walks step 1 (session model), step 2 (open settings), step
   assert.equal(source.includes("guideStepNext: 'Next'"), true)
   assert.equal(source.includes("guidePromptTitle: 'Step 2 · Vision model'"), true)
   assert.equal(source.includes("guideChainTitle: 'Step 3 · This is the vision model'"), true)
-  // Step 1 parks the prompt on the left so the chat selector stays usable.
-  assert.equal(source.includes('vr-guide-prompt-left'), true)
+  // Every step now carries a visual target, not just step 3: the prompt is
+  // anchored to a highlighted element (spotlight hole + pulsing ring + arrow),
+  // and step 2's copy differs between the sidebar gear phase and the settings
+  // panel's Plugins nav row.
+  assert.equal(source.includes('vr-guide-spot-hole'), true)
+  assert.equal(source.includes('vr-guide-spot-ring'), true)
+  assert.equal(source.includes('vr-guide-arrow'), true)
+  assert.equal(source.includes("guidePromptGearBody: '点击侧边栏左下角被高亮圈出的「设置」齿轮"), true)
+  assert.equal(source.includes("guidePromptNavBody: '在设置面板左侧的导航里，点击被高亮的「插件」入口"), true)
+  assert.equal(source.includes("guidePromptGearBody: 'Click the highlighted Settings gear"), true)
+  assert.equal(source.includes("guidePromptNavBody: 'In the settings panel’s left navigation"), true)
+  // Stable DOM anchors: DSH web hashes its CSS-module class names, so targets
+  // are addressed via data-slot / aria attributes instead of class names.
+  assert.equal(source.includes('[data-slot="conversation.input.model"] button[aria-haspopup="menu"]'), true)
+  assert.equal(source.includes('button[aria-haspopup="dialog"]'), true)
+  assert.equal(source.includes('[role="dialog"][aria-modal="true"]'), true)
+  // The prompt veils itself while the step-1 model menu is open so the menu
+  // stays clickable, and animations respect reduced motion.
+  assert.equal(source.includes('vr-guide-prompt-veiled'), true)
+  assert.equal(source.includes('prefers-reduced-motion'), true)
 })
 
 test('the settings card skips offscreen paint and rebuilds model options once', () => {
