@@ -1060,6 +1060,7 @@ test('stealth stream keeps the log intact and hands the model a tool-hint marker
 function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false, attachments = false, opencodeGo = false } = {}) {
   const adapters = new Map() // provider -> adapter
   const registrations = new Map() // provider -> { adapter, retryPolicy }
+  const directories = [] // configurable-provider registrations (directory seam)
   const captured = { skills: [], on: new Map() }
   // The mutable user document and the watch seam: tests flip config0 fields
   // and fire the watchers to simulate a settings-card save.
@@ -1208,7 +1209,10 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false, atta
         if (hit === undefined) throw new Error(`no adapter registered for provider "${provider}"`)
         return hit
       },
-      registerConfigurableProviders: () => ({ replace: () => {} }),
+      registerConfigurableProviders: (entries) => {
+        directories.push({ entries })
+        return { replace: () => {} }
+      },
       listProviders() {
         return [...registrations.entries()].map(([provider, registration]) => {
           let info
@@ -1237,10 +1241,11 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false, atta
       },
     },
   }
-  return { ctx, adapters, captured, userDoc, settingsWatchers }
+  return { ctx, adapters, captured, directories, userDoc, settingsWatchers }
 }
 
-test('apply registers the stealth deepseek-official route with the stock catalog', async () => {
+test('apply registers the stealth deepseek-official route with the stock catalog', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const { ctx, adapters } = mockHarnessCtx()
   // the harness loader normalizes the entry config through the Config schema;
   // routing: true keeps the legacy chain route mounted (the default is off —
@@ -1251,6 +1256,9 @@ test('apply registers the stealth deepseek-official route with the stock catalog
     routing: true,
     stealth: true,
   }))
+  // the takeover decision waits out the boot settle window (a not-yet-applied
+  // stock llm-deepseek row must never be mistaken for a disabled one)
+  t.mock.timers.tick(2000)
 
   // all four routes came up: hidden native, public deepseek-official, the
   // hidden wrapper alias, and the vision chain
@@ -1271,7 +1279,8 @@ test('apply registers the stealth deepseek-official route with the stock catalog
   assert.deepEqual(await adapters.get('deepseek-vision').listModels('deepseek-vision'), [])
 })
 
-test('apply skips the chain route by default: image turns go through the vision tools', () => {
+test('apply skips the chain route by default: image turns go through the vision tools', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const { ctx, adapters } = mockHarnessCtx()
   apply(ctx, Config({}))
   // tools-first philosophy: no whole-turn chain routing by default, but the
@@ -1281,6 +1290,7 @@ test('apply skips the chain route by default: image turns go through the vision 
   // keep-alive: the stock route is dead in this mock (no stockRoute), so the
   // plugin still takes over deepseek-official via the hidden native route —
   // otherwise the DeepSeek models would vanish entirely
+  t.mock.timers.tick(2000)
   assert.ok(adapters.has('deepseek-official-native'))
   assert.ok(adapters.has('deepseek-vision'))
 })
@@ -1307,12 +1317,14 @@ test('the vision chain ships with the built-in free model as its first row', () 
   ])
 })
 
-test('keep-alive fallback: stealth off + dead stock route still serves deepseek-official', async () => {
+test('keep-alive fallback: stealth off + dead stock route still serves deepseek-official', async (t) => {
   // No stockRoute in the mock = the official llm-deepseek row is disabled at
   // the composition layer (adapterAvailable throws). With stealth off the
   // plugin must STILL take over, or the DeepSeek models vanish entirely.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const { ctx, adapters } = mockHarnessCtx()
   apply(ctx, Config({ stealth: false }))
+  t.mock.timers.tick(2000)
   assert.ok(adapters.has('deepseek-official'), 'expected the keep-alive deepseek-official route')
   assert.ok(adapters.has('deepseek-official-native'), 'expected the hidden native route')
   const official = adapters.get('deepseek-official')
@@ -1320,7 +1332,8 @@ test('keep-alive fallback: stealth off + dead stock route still serves deepseek-
   assert.deepEqual(listed.map((m) => m.id), ['deepseek-v4-flash', 'deepseek-v4-pro'])
 })
 
-test('stealth off + alive stock route performs no takeover at all', async () => {
+test('stealth off + alive stock route performs no takeover at all', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const { ctx, adapters } = mockHarnessCtx({ stockRoute: true })
   apply(ctx, Config({ stealth: false }))
   // the stock adapter keeps owning deepseek-official; the plugin registers no
@@ -1330,6 +1343,43 @@ test('stealth off + alive stock route performs no takeover at all', async () => 
   const listed = await stock.listModels('deepseek-official')
   assert.deepEqual(listed[0].inputModalities, ['text'])
   assert.ok(adapters.has('deepseek-vision'), 'expected the visible wrapper route')
+  // even after the settle window the stock row's live route is left alone
+  t.mock.timers.tick(2000)
+  assert.equal(adapters.has('deepseek-official-native'), false)
+})
+
+test('rc.5 activation order: a late stock row is never mistaken for a disabled one', (t) => {
+  // Reproduces the Oh-DSH Desktop (DSH 0.1.0-rc.5) boot crash: entry
+  // activation is service-driven there, so vision-router's apply can run
+  // BEFORE the stock llm-deepseek row. The old synchronous keep-alive check
+  // read the not-yet-registered route as dead, registered the
+  // deepseek-official directory entry first, and the stock row then threw
+  // DUPLICATE_DIRECTORY, killing the runtime before readiness.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { ctx, adapters, directories } = mockHarnessCtx()
+  apply(ctx, Config({ stealth: false }))
+  // the stock row applies after us (late registration + its directory entry)
+  const stock = {
+    providerInfo: (p) => ({ id: p, name: 'DeepSeek' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', inputModalities: ['text'] },
+    ],
+    resolveModel: async (p, m) => ({ provider: p, id: m, name: m, inputModalities: ['text'] }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['deepseek-official'], stock)
+  // settle window elapses: the official route is alive, so hands off entirely
+  t.mock.timers.tick(2000)
+  assert.equal(adapters.has('deepseek-official-native'), false)
+  assert.equal(adapters.get('deepseek-official'), stock, 'stock adapter must stay in charge')
+  assert.deepEqual(
+    directories.filter((entry) => entry.entries.some((row) => row && row.provider === 'deepseek-official')),
+    [],
+    'the plugin must never claim the deepseek-official directory entry while the stock row is alive',
+  )
 })
 
 // ── catalog routing corrections (issue: opencode-go qwen3.6-plus) ──────────

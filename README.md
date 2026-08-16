@@ -340,6 +340,25 @@ npx @deepseek-ai/dsh --profile web --dump-config | grep vision-router
 
 When first adding the plugin to an already long-lived Web profile, let that Web process reload the plugin bundle; the host discovers the browser bundle through `dsh.client` at startup. **After the plugin is loaded, model-catalog and wrapper-scope changes hot-update and do not require a restart.**
 
+### Oh-DSH Desktop
+
+[Oh-DSH Desktop](https://github.com/hust-open-atom-club/oh-dsh) ships its own packaged DSH runtime and its own home layout: the desktop surface runs the `desktop` profile under `~/.ohdsh` and does **not** load ordinary `~/.dsh` profiles. The `--profile web` commands above therefore install into the wrong environment on that product.
+
+Install into the desktop profile by pointing `DSH_HOME` at the Oh-DSH home:
+
+```sh
+DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add dsh-vision-router
+```
+
+(Windows PowerShell: run `$env:DSH_HOME = "$env:USERPROFILE\.ohdsh"` first, then the same command.)
+
+> [!WARNING]
+> Oh-DSH Desktop ≤ 0.1.5 bundles DSH `0.1.0-rc.5`. `dsh-vision-router` v1.4.1 and earlier crash that runtime at startup (`configurable provider "deepseek-official" is already declared`, surfacing as `DSH runtime exited before readiness`). Install v1.4.2+; until v1.4.2 is released, install the fix branch directly: `DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add github:ysr666/dsh-vision-router#fix/keep-alive-takeover-race`.
+
+If a broken install already keeps the Desktop from starting, open `~/.ohdsh/profiles/desktop/package.json`, remove the `dsh-vision-router` entry from both `dependencies` and `dsh.profile.bundles`, save, and restart the Desktop.
+
+Oh-DSH Desktop's built-in plugin marketplace (search → prepare → isolated preview → apply, with a `previous` snapshot for recovery) also works once the community catalog lists this plugin; do not mix marketplace installs with the direct command above. The bundled `@oh-dsh/vision` (`view_image`) coexists with this plugin — the tool names do not collide.
+
 ### Disable / re-enable
 
 ```yaml

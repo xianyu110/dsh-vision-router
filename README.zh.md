@@ -338,6 +338,25 @@ npx @deepseek-ai/dsh --profile web --dump-config | grep vision-router
 
 首次把插件装进已经长期运行的 Web profile 时，需要让 Web 进程重新加载插件本体；宿主在启动时通过 `dsh.client` 声明发现浏览器端包。**插件加载完成后，模型目录与包装范围的变化会热更新，不需要为这些变化重启。**
 
+### Oh-DSH Desktop
+
+[Oh-DSH Desktop](https://github.com/hust-open-atom-club/oh-dsh) 自带一套独立打包的 DSH 运行时和独立的数据目录：桌面端实际运行的是 `~/.ohdsh` 下的 `desktop` profile，**不会**加载普通 `~/.dsh` 的 profile。因此上面 `--profile web` 的命令在 Oh-DSH Desktop 上会装错环境。
+
+把 `DSH_HOME` 指向 Oh-DSH 的数据目录再安装即可：
+
+```sh
+DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add dsh-vision-router
+```
+
+（Windows PowerShell 先执行 `$env:DSH_HOME = "$env:USERPROFILE\.ohdsh"`，再运行同一命令。）
+
+> [!WARNING]
+> Oh-DSH Desktop ≤ 0.1.5 内置的是 DSH `0.1.0-rc.5`。`dsh-vision-router` v1.4.1 及更早版本会让该运行时在启动时崩溃（报 `configurable provider "deepseek-official" is already declared`，在 Oh-DSH Desktop 里表现为 `DSH runtime exited before readiness`）。请安装 v1.4.2+；在 v1.4.2 发布之前，可直接安装修复分支：`DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add github:ysr666/dsh-vision-router#fix/keep-alive-takeover-race`。
+
+如果错误安装已经导致 Desktop 无法启动：打开 `~/.ohdsh/profiles/desktop/package.json`，从 `dependencies` 和 `dsh.profile.bundles` 中删掉 `dsh-vision-router` 条目，保存后重启 Desktop。
+
+Oh-DSH Desktop 内置的插件市场（搜索 → 准备 → 隔离预览 → 应用，并保留 `previous` 快照用于恢复）在社区目录收录本插件后同样可用；不要与上面的直接安装命令混用。其内置的 `@oh-dsh/vision`（`view_image`）与本插件可共存，工具名不冲突。
+
 ### 禁用 / 恢复
 
 ```yaml
