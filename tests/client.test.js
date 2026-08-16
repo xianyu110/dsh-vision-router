@@ -527,3 +527,19 @@ test('auto-discovered inferred vision models retain bridge capability state', ()
   assert.equal(source.includes('resolvedPiAiProfileOf'), true)
   assert.equal(source.includes("transport.api !== 'openai-completions'"), true)
 })
+
+test('the twin preserves the picker-chosen reasoningEffort across steps (issue #103)', () => {
+  const serverSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  // The reasoning level belongs to the chat page's bottom-right picker: the
+  // plugin never configures or invents one. The wrapper body only remembers
+  // the last explicitly seen effort per delegate and re-injects it on the
+  // later steps that arrive without one, so the user's choice survives the
+  // twin switch (memory is scoped per provider+model).
+  // twin switch. The vision chain keeps reasoningEffort: undefined.
+  assert.equal(serverSource.includes('const lastReasoningEffort = new Map()'), true)
+  assert.equal(serverSource.includes('lastReasoningEffort.set(effortKey, effort)'), true)
+  assert.equal(serverSource.includes('{ ...options, reasoningEffort: effort }'), true)
+  assert.equal(serverSource.includes('reasoningEffort: undefined'), true)
+  assert.equal(serverSource.includes('reasoningEffort: z.string()'), false)
+  assert.equal(serverSource.includes('wrappedProviders[].reasoningEffort'), false)
+})

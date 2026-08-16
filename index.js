@@ -1952,6 +1952,15 @@ export function createNativeDeepSeekAdapter(ctx) {
  * turns with continuous multi-step operations.
  */
 export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, preserveImageInput }) {
+  // issue #103: the reasoning level is a per-session picker choice (the chat
+  // page's bottom-right selector), but the host can drop reasoningEffort from
+  // the later steps of a multi-step turn once the twin metadata lacks a
+  // reasoning.defaultEffort (only step 1 thinks). Remember the last explicit
+  // effort seen per delegate — whatever the user actually picked — and
+  // re-inject it when a later call arrives without one, so every step keeps
+  // the user's chosen level. The vision chain never flows through this body
+  // and keeps its own reasoningEffort: undefined.
+  const lastReasoningEffort = new Map() // "provider\0model" -> last explicit effort
   return {
     async *stream(options) {
       const messages = options.messages ?? []
@@ -2006,8 +2015,21 @@ export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, pr
         })
         return result.changed ? { ...message, content: result.content } : message
       })
+      // Remember per delegate+model rather than per delegate alone: the
+      // stream boundary carries no session id, so provider+model is the
+      // narrowest scope available and keeps two concurrent sessions on the
+      // same twin from sharing one memory slot.
+      const effortKey = `${delegateProvider}\u0000${options.model ?? ''}`
+      let effort = typeof options.reasoningEffort === 'string' && options.reasoningEffort !== ''
+        ? options.reasoningEffort
+        : undefined
+      if (effort !== undefined) {
+        lastReasoningEffort.set(effortKey, effort)
+      } else {
+        effort = lastReasoningEffort.get(effortKey)
+      }
       yield* ctx.llm.stream({
-        ...options,
+        ...(effort === undefined ? options : { ...options, reasoningEffort: effort }),
         provider: delegateProvider,
         messages: rewritten,
       })
@@ -2642,7 +2664,13 @@ export function apply(ctx, config = {}) {
   // declares image input so the admission passes, shows up in the model
   // picker as "DeepSeek + 自动识图", and delegates to the real text-provider
   // adapter for anything the waterfalls did not rewrite.
-  if (wrapperRoute() !== undefined) {
+  //
+  // The adapter is built unconditionally; whether (and under which name) it
+  // mounts is reconciled reactively against the resolved settings document by
+  // syncRoutingMounts() below, so the card's wrapperRoute/routing switches
+  // take effect without a restart.
+  let wrapperAdapter
+  {
     const WRAPPER_MODEL_IDS = ['deepseek-v4-pro', 'deepseek-v4-flash']
     const wrapName = (name) => name ?? 'DeepSeek'
     const textProviderRoute = () => (stealthActive ? nativeRoute : textProvider().provider)
@@ -2653,7 +2681,7 @@ export function apply(ctx, config = {}) {
         return undefined
       }
     }
-    const wrapperAdapter = {
+    wrapperAdapter = {
       providerInfo(provider) {
         return { id: provider, name: 'DeepSeek + 自动识图' }
       },
@@ -2742,9 +2770,6 @@ export function apply(ctx, config = {}) {
         delegateProvider: textProviderRoute(),
       }),
     }
-    const handle = ctx.llm.registerAdapter([wrapperRoute()], wrapperAdapter)
-    wrapperRegistered = true
-    ctx.effect(() => handle, 'vision-router: wrapper route')
   }
 
 
@@ -2817,6 +2842,12 @@ export function apply(ctx, config = {}) {
         return false
       }
     }
+    // issue #103: the twin mirrors the source metadata one-to-one, so any
+    // reasoning.defaultEffort the source advertises is inherited as-is. The
+    // reasoning LEVEL itself stays a per-session picker choice (bottom-right
+    // selector): the wrapper body below preserves it across the twin switch
+    // by remembering the last explicit effort and re-injecting it on the
+    // later steps that arrive without one.
     return {
       providerInfo() {
         const original = originalAdapter()
@@ -3143,8 +3174,13 @@ export function apply(ctx, config = {}) {
   // model-switch retry. To make fallback reliable, image turns are routed to
   // this chain adapter instead; it walks the configured providers itself and
   // only surfaces a failure once every model has failed.
-  if (chainRoute() !== undefined && routingEnabled()) {
-    const chainAdapter = {
+  //
+  // Built unconditionally; syncRoutingMounts() below mounts it whenever the
+  // resolved settings enable routing, so the card's routing switch takes
+  // effect without a restart.
+  let chainAdapter
+  {
+    chainAdapter = {
       providerInfo(provider) {
         return { id: provider, name: 'Vision Chain' }
       },
@@ -3317,9 +3353,79 @@ export function apply(ctx, config = {}) {
         }
       },
     }
-    const handle = ctx.llm.registerAdapter([chainRoute()], chainAdapter)
-    ctx.effect(() => handle, 'vision-router: chain route')
   }
+
+  // ── reactive routing mounts ────────────────────────────────────────────────
+  //
+  // Legacy routing used to be composition-gated at apply time while the
+  // settings card exposes the same switches — flipping them mid-session left
+  // the flow half-wired (hooks reading the settings document against mounts
+  // registered from the composition). The wrapper route, the chain route and
+  // the agent/request hook now reconcile against the resolved settings
+  // document: the settings seam below runs one initial sync and re-syncs on
+  // every document change, so toggles take effect immediately.
+  let wrapperRouteHandle
+  let wrapperRouteMounted
+  let chainRouteHandle
+  let chainRouteMounted
+  const syncRoutingMounts = () => {
+    const wantWrapper = wrapperRoute()
+    if (wantWrapper !== wrapperRouteMounted) {
+      if (wrapperRouteHandle) {
+        wrapperRouteHandle()
+        wrapperRouteHandle = undefined
+        wrapperRouteMounted = undefined
+      }
+      wrapperRegistered = false
+      if (wantWrapper !== undefined) {
+        try {
+          wrapperRouteHandle = ctx.llm.registerAdapter([wantWrapper], wrapperAdapter)
+          wrapperRouteMounted = wantWrapper
+          wrapperRegistered = true
+        } catch (error) {
+          if (error && error.code === 'DUPLICATE_ADAPTER') {
+            // Another layer already serves this name: adopt it and keep the
+            // flow functional instead of failing the apply.
+            wrapperRouteMounted = wantWrapper
+            wrapperRegistered = true
+          } else {
+            throw error
+          }
+        }
+      }
+    }
+    const wantChain = routingEnabled() ? chainRoute() : undefined
+    if (wantChain !== chainRouteMounted) {
+      if (chainRouteHandle) {
+        chainRouteHandle()
+        chainRouteHandle = undefined
+        chainRouteMounted = undefined
+      }
+      if (wantChain !== undefined) {
+        try {
+          chainRouteHandle = ctx.llm.registerAdapter([wantChain], chainAdapter)
+          chainRouteMounted = wantChain
+        } catch (error) {
+          if (error && error.code === 'DUPLICATE_ADAPTER') {
+            chainRouteMounted = wantChain
+          } else {
+            throw error
+          }
+        }
+      }
+    }
+  }
+  ctx.effect(
+    () => () => {
+      if (wrapperRouteHandle) wrapperRouteHandle()
+      if (chainRouteHandle) chainRouteHandle()
+      wrapperRouteHandle = undefined
+      chainRouteHandle = undefined
+      wrapperRouteMounted = undefined
+      chainRouteMounted = undefined
+    },
+    'vision-router: reactive routing mounts',
+  )
   // session -> Map<attachmentId, ref> (uploaded images visible to vision_describe)
   const sessionAttachments = new WeakMap()
   // secondary index by session id string (agent.session object identity can change across turns)
@@ -3717,52 +3823,54 @@ export function apply(ctx, config = {}) {
     return sanitizedToolResults.changed ? { ...decision, messages } : decision
   })
 
-  if (routingEnabled()) {
-    ctx.on('agent/request', async (payload, next) => {
-      const config0 = await next()
-      const session = payload.agent && payload.agent.session
-      if (!session) return config0
-      const state = turnState.get(session)
-      if (!state || state.turn !== payload.turn) return config0
-      if (!state.hasImage) {
-        const events = session.events ?? []
-        for (let i = state.startIndex; i < events.length; i++) {
-          if (eventHasImage(events[i])) {
-            state.hasImage = true
-            break
-          }
+  // Registered unconditionally and gated at runtime so the settings card's
+  // routing switch takes effect immediately (syncRoutingMounts reconciles the
+  // adapters the same way).
+  ctx.on('agent/request', async (payload, next) => {
+    const config0 = await next()
+    if (!routingEnabled()) return config0
+    const session = payload.agent && payload.agent.session
+    if (!session) return config0
+    const state = turnState.get(session)
+    if (!state || state.turn !== payload.turn) return config0
+    if (!state.hasImage) {
+    const events = session.events ?? []
+    for (let i = state.startIndex; i < events.length; i++) {
+      if (eventHasImage(events[i])) {
+        state.hasImage = true
+        break
+      }
+    }
+    }
+    if (!state.hasImage) {
+      // Reverse routing: the session's entry model is a vision provider
+      // (needed to pass the prompt admission); send text-only turns back
+      // to the text provider (DeepSeek) so daily work stays on it.
+      if (reverseRoutingEnabled()) {
+        const target = reverseRouteTarget(config0, {
+          pairs: pairs(),
+          wrapperRoute: wrapperRoute(),
+          wrapperRegistered,
+          textProvider: textProvider(),
+          hasAdapter: (provider) => adapterAvailable(ctx.llm, provider),
+        })
+        if (target !== undefined) {
+          return switchRoute(config0, target.provider, target.model)
         }
       }
-      if (!state.hasImage) {
-        // Reverse routing: the session's entry model is a vision provider
-        // (needed to pass the prompt admission); send text-only turns back
-        // to the text provider (DeepSeek) so daily work stays on it.
-        if (reverseRoutingEnabled()) {
-          const target = reverseRouteTarget(config0, {
-            pairs: pairs(),
-            wrapperRoute: wrapperRoute(),
-            wrapperRegistered,
-            textProvider: textProvider(),
-            hasAdapter: (provider) => adapterAvailable(ctx.llm, provider),
-          })
-          if (target !== undefined) {
-            return switchRoute(config0, target.provider, target.model)
-          }
-        }
-        return config0
-      }
-      // Route the image turn to the chain adapter (falls back under our own
-      // control), or directly to the first vision model when the chain route
-      // is disabled.
-      if (chainRoute() !== undefined) {
-        if (config0.provider === chainRoute()) return config0
-        return switchRoute(config0, chainRoute(), `${pairs()[0].provider}/${pairs()[0].model}`)
-      }
-      const first = pairs()[0]
-      if (first === undefined || config0.provider === first.provider) return config0
-      return switchRoute(config0, first.provider, first.model)
-    })
-  }
+      return config0
+    }
+    // Route the image turn to the chain adapter (falls back under our own
+    // control), or directly to the first vision model when the chain route
+    // is disabled.
+    if (chainRoute() !== undefined) {
+      if (config0.provider === chainRoute()) return config0
+      return switchRoute(config0, chainRoute(), `${pairs()[0].provider}/${pairs()[0].model}`)
+    }
+    const first = pairs()[0]
+    if (first === undefined || config0.provider === first.provider) return config0
+    return switchRoute(config0, first.provider, first.model)
+  })
 
   if (toolEnabled()) {
     const deepToolDefs = []
@@ -5337,6 +5445,9 @@ export function apply(ctx, config = {}) {
       base: config,
     })
     current = () => scope.get()
+    // With the settings document now visible, reconcile the routing mounts
+    // (wrapper route, chain route) against the resolved values.
+    syncRoutingMounts()
     sctx.effect(
       () => () => {
         // The settings provider went away: fall back to the composition entry.
@@ -5346,9 +5457,10 @@ export function apply(ctx, config = {}) {
     )
     scope.watch(() => {
       // Most consumers read current() per call, but the wrappedProviders
-      // twins are registered eagerly: re-sync them whenever the settings
-      // document loads or the user edits the wrappers section.
+      // twins and the routing mounts are registered eagerly: re-sync them
+      // whenever the settings document loads or the user edits the card.
       syncTwins()
+      syncRoutingMounts()
     })
   })
 

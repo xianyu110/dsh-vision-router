@@ -1061,6 +1061,10 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
   const adapters = new Map() // provider -> adapter
   const registrations = new Map() // provider -> { adapter, retryPolicy }
   const captured = { skills: [], on: new Map() }
+  // The mutable user document and the watch seam: tests flip config0 fields
+  // and fire the watchers to simulate a settings-card save.
+  const userDoc = config0
+  const settingsWatchers = []
   if (stockRoute) {
     const stock = {
       providerInfo: (p) => ({ id: p, name: 'DeepSeek' }),
@@ -1103,13 +1107,21 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
     },
     inject(_deps, callback) {
       // settings seam: run synchronously against a mock settings service that
-      // resolves the composition entry through the Config schema defaults.
+      // mirrors the real one — schema defaults over the composition entry
+      // (apply's `config`, passed as `base`) over the user document (userDoc).
       const scope = {
-        get: () => ({ ...Config({}), ...config0 }),
-        watch: () => {},
+        get: () => ({ ...Config({}), ...userDoc }),
+        watch: (fn) => {
+          settingsWatchers.push(fn)
+        },
       }
       const sctx = {
-        settings: { register: () => scope },
+        settings: {
+          register: (_name, _schema, options) => {
+            const base = options && options.base ? options.base : {}
+            return { ...scope, get: () => ({ ...Config({}), ...base, ...userDoc }) }
+          },
+        },
         effect: () => () => {},
       }
       callback(sctx)
@@ -1128,8 +1140,15 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
           adapters.set(provider, adapter)
           registrations.set(provider, { adapter, retryPolicy: adapter.providerRetryPolicy(provider) })
         }
-        // mirror the real handle: callable disposer with a replace() sidecar
-        const handle = () => {}
+        // mirror the real handle: calling it disposes the registration
+        const handle = () => {
+          for (const provider of providers) {
+            if (adapters.get(provider) === adapter) adapters.delete(provider)
+            if (registrations.get(provider) && registrations.get(provider).adapter === adapter) {
+              registrations.delete(provider)
+            }
+          }
+        }
         handle.replace = () => {}
         return handle
       },
@@ -1155,12 +1174,19 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
         if (hit === undefined || typeof hit.adapter.listModels !== 'function') return []
         return hit.adapter.listModels(provider)
       },
+      async resolveModelInfo(provider, model) {
+        const hit = registrations.get(provider)
+        if (hit === undefined || typeof hit.adapter.resolveModel !== 'function') {
+          throw new Error(`no adapter registered for provider "${provider}"`)
+        }
+        return hit.adapter.resolveModel(provider, model)
+      },
       stream: async function* () {
         yield { type: 'finish', reason: { kind: 'stop' } }
       },
     },
   }
-  return { ctx, adapters, captured }
+  return { ctx, adapters, captured, userDoc, settingsWatchers }
 }
 
 test('apply registers the stealth deepseek-official route with the stock catalog', async () => {
@@ -1504,6 +1530,113 @@ test('apply registers an image-capable twin route for wrappedProviders', async (
   assert.ok(delegateCall.messages[0].content[0].text.includes('img-1'))
 })
 
+test('twin mirrors the source reasoning metadata one-to-one (defaultEffort inheritance)', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const source = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      {
+        provider: p, id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', inputModalities: ['text'],
+        reasoning: { efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
+      },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+      reasoning: { efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], source)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const listed = await twin.listModels('opencode-go-vision')
+  assert.equal(listed[0].reasoning.defaultEffort, 'high')
+  assert.deepEqual(listed[0].reasoning.efforts, ['low', 'high', 'max'])
+  const resolved = await twin.resolveModel('opencode-go-vision', 'deepseek-v4-flash')
+  assert.equal(resolved.reasoning.defaultEffort, 'high')
+})
+
+test('twin wrapper re-injects the last explicit reasoningEffort on later steps (issue #103)', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const source = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'm', name: 'M', inputModalities: ['text'] },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], source)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const calls = []
+  ctx.llm.stream = async function* (options) {
+    calls.push({ ...options })
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const drain = async (options) => {
+    for await (const _c of twin.stream(options)) {
+      /* drain */
+    }
+  }
+  // step 1 carries the effort explicitly; the later steps arrive without it
+  // (the agent drops it once the twin metadata lacks a default) and must
+  // inherit the remembered value so every step keeps thinking.
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [], reasoningEffort: 'max' })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [], reasoningEffort: 'off' })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
+  assert.equal(calls[0].reasoningEffort, 'max')
+  assert.equal(calls[1].reasoningEffort, 'max')
+  assert.equal(calls[2].reasoningEffort, 'off')
+  assert.equal(calls[3].reasoningEffort, 'off')
+  // the memory is scoped per provider+model: a second model on the same
+  // twin must not inherit the first model's remembered effort
+  await drain({ provider: 'opencode-go-vision', model: 'other', messages: [] })
+  assert.equal(calls[4].reasoningEffort, undefined)
+})
+
+test('twin wrapper leaves the effort untouched when nothing was seen or configured', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const source = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [{ provider: p, id: 'm', name: 'M', inputModalities: ['text'] }],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], source)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const calls = []
+  ctx.llm.stream = async function* (options) {
+    calls.push({ ...options })
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages: [] })) {
+    /* drain */
+  }
+  assert.equal(calls[0].reasoningEffort, undefined)
+})
+
 test('twin route registers before its source adapter appears (live provider registration)', async () => {
   // llm-pi-ai mounts dormant: its routes (openrouter/deepseek) register LIVE
   // once the settings document loads, i.e. AFTER other plugins' apply().
@@ -1660,6 +1793,16 @@ test('apply falls back to the visible wrapper when the stock route is still acti
 
 test('wrapper lists the vision-chain pairs only when whole-turn routing is on', async () => {
   const { ctx, adapters } = mockHarnessCtx({ stockRoute: true, config0: { routing: true } })
+  ctx.llm.registerAdapter(['openrouter'], {
+    providerInfo: (p) => ({ id: p, name: 'OpenRouter' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'qwen/qwen3-vl-235b-a22b-instruct', name: 'Qwen3-VL', inputModalities: ['text', 'image'] },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text', 'image'], context: { contextWindow: 100000 },
+    }),
+  })
   apply(ctx, Config({
     provider: 'openrouter',
     providers: [{ provider: 'openrouter', model: 'qwen/qwen3-vl-235b-a22b-instruct' }],
@@ -1670,16 +1813,16 @@ test('wrapper lists the vision-chain pairs only when whole-turn routing is on', 
   assert.deepEqual(wrapped.map((m) => m.id), [
     'deepseek-v4-flash',
     'deepseek-v4-pro',
-    'vision-http/ovh/Qwen3.5-397B-A17B',
+    'openrouter/qwen/qwen3-vl-235b-a22b-instruct',
   ])
-  const visionEntry = wrapped.find((m) => m.id === 'vision-http/ovh/Qwen3.5-397B-A17B')
+  const visionEntry = wrapped.find((m) => m.id === 'openrouter/qwen/qwen3-vl-235b-a22b-instruct')
   assert.ok(visionEntry)
   assert.deepEqual(visionEntry.inputModalities, ['text', 'image'])
   assert.ok(String(visionEntry.name).includes('视觉'))
   // resolving a vision-pair entry still returns image-capable metadata
-  const resolved = await wrapper.resolveModel('deepseek-vision', 'vision-http/ovh/Qwen3.5-397B-A17B')
+  const resolved = await wrapper.resolveModel('deepseek-vision', 'openrouter/qwen/qwen3-vl-235b-a22b-instruct')
   assert.deepEqual(resolved.inputModalities, ['text', 'image'])
-  assert.equal(resolved.id, 'vision-http/ovh/Qwen3.5-397B-A17B')
+  assert.equal(resolved.id, 'openrouter/qwen/qwen3-vl-235b-a22b-instruct')
 })
 test('floodFillBackground clears border-connected background pixels', () => {
   // 4x4: white background, black 2x2 square in the middle
@@ -2394,4 +2537,177 @@ test('channel bridge transport uses resolved pi-ai catalog model facts', () => {
       apiKeyEnv: undefined,
     },
   )
+})
+
+// ── strict-upstream audit (#103 follow-up) ─────────────────────────────────
+// The plugin fabricates capability hints (twin reasoning defaults, image
+// declarations on wrapper routes, extraVisionModels overrides). These tests
+// run a STRICT upstream that throws on anything it cannot actually handle,
+// proving nothing fabricated is ever forwarded unsafely.
+
+test('strict upstream: twin forwards only what the picker explicitly sent', async () => {
+  const supported = new Set(['off', 'high', 'max'])
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const strict = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'm', name: 'M', inputModalities: ['text'], reasoning: { efforts: [...supported] } },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+      reasoning: { efforts: [...supported] },
+    }),
+  }
+  ctx.llm.registerAdapter(['opencode-go'], strict)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const seen = []
+  ctx.llm.stream = async function* (options) {
+    if (options.reasoningEffort !== undefined && !supported.has(options.reasoningEffort)) {
+      throw new Error(`strict upstream rejects reasoningEffort "${options.reasoningEffort}"`)
+    }
+    seen.push(options.reasoningEffort)
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const drain = async (options) => {
+    for await (const _c of twin.stream(options)) {
+      /* drain */
+    }
+  }
+  // the user picked 'max' in the bottom-right selector: the first step
+  // carries it, and the wrapper remembers it for the steps that follow
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [], reasoningEffort: 'max' })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
+  assert.deepEqual(seen, ['max', 'max'])
+})
+
+test('strict upstream: twin never leaks image blocks to a text-only source', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const strict = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'm', name: 'M', inputModalities: ['text'] },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+  }
+  ctx.llm.registerAdapter(['opencode-go'], strict)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const seen = []
+  ctx.llm.stream = async function* (options) {
+    const flattened = JSON.stringify(options.messages)
+    if (flattened.includes('"type":"image"')) {
+      throw new Error('strict upstream rejects image blocks')
+    }
+    seen.push(options)
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const messages = [
+    { role: 'user', content: [{ type: 'image', attachment: { attachmentId: 'img-1', name: 'a.png' } }, { type: 'text', text: '看这张图' }] },
+  ]
+  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages })) {
+    /* drain */
+  }
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].messages[0].content.filter((b) => b.type === 'image').length, 0)
+})
+
+test('strict upstream: vision chain fails over when a forced extraVisionModels backend rejects the image', async () => {
+  // The chain route is an eager composition-level opt-in (registered while
+  // apply() still reads the composition config), while its pair list is read
+  // lazily from the settings scope — supply both layers.
+  const chainConfig = {
+    routing: true,
+    chainRoute: 'vision-chain',
+    providers: [
+      { provider: 'forced', model: 'fake-vl' },
+      { provider: 'good', model: 'qwen-vl' },
+    ],
+    // The expert escape hatch forces a text-only model into the chain —
+    // the strict upstream rejects it, and the chain must fall through to
+    // the genuinely image-capable backend.
+    extraVisionModels: ['forced/fake-vl'],
+  }
+  const { ctx, adapters } = mockHarnessCtx({ config0: chainConfig })
+  const forced = {
+    providerInfo: (p) => ({ id: p, name: 'Forced' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [{ provider: p, id: 'fake-vl', name: 'Fake-VL', inputModalities: ['text'] }],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+  }
+  const good = {
+    providerInfo: (p) => ({ id: p, name: 'Good' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [{ provider: p, id: 'qwen-vl', name: 'Qwen-VL', inputModalities: ['text', 'image'] }],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text', 'image'], context: { contextWindow: 100000 },
+    }),
+  }
+  ctx.llm.registerAdapter(['forced'], forced)
+  ctx.llm.registerAdapter(['good'], good)
+  apply(ctx, Config(chainConfig))
+  const chain = adapters.get('vision-chain')
+  assert.ok(chain, 'expected the vision chain route')
+  const calls = []
+  ctx.llm.stream = async function* (options) {
+    calls.push(options.provider)
+    if (options.provider === 'forced') throw new Error('forced backend rejects images')
+    yield { type: 'text', text: 'ok' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const messages = [
+    { role: 'user', content: [{ type: 'image', attachment: { attachmentId: 'img-1', name: 'a.png' } }, { type: 'text', text: '看' }] },
+  ]
+  const chunks = []
+  for await (const chunk of chain.stream({ provider: 'vision-chain', model: 'forced/fake-vl', messages })) {
+    chunks.push(chunk)
+  }
+  assert.deepEqual(calls, ['forced', 'good'])
+  assert.equal(chunks[chunks.length - 1].type, 'finish')
+  assert.equal(chunks[chunks.length - 1].reason.kind, 'stop')
+})
+
+test('legacy routing mounts follow the settings document without a restart', async () => {
+  const { ctx, adapters, captured, userDoc, settingsWatchers } = mockHarnessCtx({
+    config0: { routing: false },
+  })
+  apply(ctx, Config({}))
+  // The agent/request hook is registered unconditionally and gates at
+  // runtime, so the settings switch reaches it immediately.
+  assert.equal(typeof captured.on.get('agent/request'), 'function')
+  assert.equal(adapters.has('vision-chain'), false, 'chain route off while routing is disabled')
+  // the user flips the routing switch in the settings card
+  userDoc.routing = true
+  for (const watch of settingsWatchers) watch()
+  assert.ok(adapters.has('vision-chain'), 'chain route mounts when routing turns on')
+  // and off again
+  userDoc.routing = false
+  for (const watch of settingsWatchers) watch()
+  assert.equal(adapters.has('vision-chain'), false, 'chain route unmounts when routing turns off')
+})
+
+test('wrapper route mount follows the settings wrapperRoute name', async () => {
+  const { ctx, adapters, userDoc, settingsWatchers } = mockHarnessCtx({
+    stockRoute: true,
+    config0: { wrapperRoute: '' },
+  })
+  apply(ctx, Config({}))
+  assert.equal(adapters.has('deepseek-vision'), false, 'no wrapper while the name is empty')
+  userDoc.wrapperRoute = 'deepseek-vision'
+  for (const watch of settingsWatchers) watch()
+  assert.ok(adapters.has('deepseek-vision'), 'wrapper mounts under the configured name')
+  userDoc.wrapperRoute = 'my-wrapper'
+  for (const watch of settingsWatchers) watch()
+  assert.equal(adapters.has('deepseek-vision'), false, 'old name is disposed')
+  assert.ok(adapters.has('my-wrapper'), 'wrapper re-mounts under the new name')
 })
