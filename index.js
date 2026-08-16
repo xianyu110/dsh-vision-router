@@ -5159,8 +5159,14 @@ export function apply(ctx, config = {}) {
                 return
               }
               if (!selfUpdateInFlight) {
-                const pending = runDshPluginUpdate(selfUpdatePlan)
-                  .then((result) => ({ ...result, targetVersion: fresh.latestVersion }))
+                // Pass the registry-confirmed version in: the updater installs
+                // it explicitly (`add <name>@<target>`) and verifies the
+                // installed manifest afterwards, so a pnpm release-age policy
+                // silently keeping the old version is reported as a failure
+                // instead of a false success.
+                const pending = runDshPluginUpdate(selfUpdatePlan, {
+                  targetVersion: fresh.latestVersion,
+                })
                 selfUpdateInFlight = pending
                 void pending.then(
                   () => {
