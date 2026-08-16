@@ -3,6 +3,13 @@
 每个版本的中英双语发布说明（GitHub Release 工作流从这里取对应版本的段落，发布前必须先写好本节）｜
 Bilingual (Chinese + English) release notes for every version — the GitHub Release workflow pulls the matching section from this file, so it must be filled in before tagging.
 
+## v1.4.1
+
+### 修复 / Fixed
+
+- **视觉失败链不再拖垮文本对话（#117）**：单个视觉后端的配置错误 / 401 / 429 / 临时故障此前会被放大成数分钟的重复视觉工具调用——超时逐层叠加（120s×N）、429 盲等 30–60s 重试、无熔断、无同轮失败记忆，后端失败以异常形式抛给模型，诱导其反复改问法重试直至 `tool call aborted`。现在引入统一韧性机制：AUTH 按凭据指纹熔断（换 Key 自动解除）、429 按 Retry-After 冷却、INVALID_REQUEST 本轮跳过；同一轮全部后端失败后，后续视觉调用零网络快速返回 `VISION_BACKEND_UNAVAILABLE_THIS_TURN`。单次视觉任务共享一个总预算（新增 `visionTaskTimeoutMs`，默认 45s），OCR 由 tesseract（≤12s）与视觉模型回退共享另一个预算（新增 `ocrTimeoutMs`，默认 30s），不再把两层超时相加。后端失败以结构化结果（`ok:false + code + retryable:false + attemptedProviders`）返回而非抛异常；401 时附带 Qwen Token Plan Key/端点不匹配提示；`vision_describe` / `vision_ground` / `vision_detect` / `vision_ocr` 工具描述、自动挂载提醒、wrapper 图片标记与 vision-tools skill 统一写明失败语义与「OCR 只读文字、绝不当识别重试」边界。新增 22 个回归测试覆盖 401/429 熔断、同轮防重打、总 deadline、OCR 预算、凭据更新解除熔断、wrapper/twin 委托一致性等全部场景。
+- **Vision failure chains can no longer stall text turns (#117)**: one misconfigured/broken vision backend (401 / 429 / outage) used to cascade into minutes of repeated vision tool calls — stacked per-request timeouts (120s × N), blind 30–60s 429 retry waits, no circuit breaking, no same-turn failure memory, and backend failures surfaced as exceptions that invited the model to rephrase and retry until `tool call aborted`. A unified resilience layer now trips AUTH backends per credential fingerprint (auto-released when the key changes), applies Retry-After cooldowns for 429s, skips INVALID_REQUEST backends for the turn, and answers instantly with `VISION_BACKEND_UNAVAILABLE_THIS_TURN` once every backend failed this turn — zero further network attempts. One vision task shares a wall-clock budget (new `visionTaskTimeoutMs`, default 45s); OCR shares one budget between tesseract (≤12s cap) and the vision-model fallback (new `ocrTimeoutMs`, default 30s) instead of stacking the two timeouts. Backend failures return structured results (`ok:false + code + retryable:false + attemptedProviders`) instead of throwing; 401s carry a Qwen Token Plan key/endpoint mismatch hint; and the `vision_describe` / `vision_ground` / `vision_detect` / `vision_ocr` descriptions, the auto-mount reminder, the wrapper image marker and the vision-tools skill all state the failure semantics and that OCR is text-only, never a recognition retry. 22 new regression tests cover the full matrix: 401/429 trips, same-turn no-rehit, shared deadlines, OCR budget, credential-change release, and wrapper/twin delegation parity.
+
 ## v1.4.0
 
 ### 改进 / Changed
