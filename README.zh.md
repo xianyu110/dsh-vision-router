@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ysr666/dsh-vision-router/releases/tag/v1.3.0"><img src="https://img.shields.io/badge/release-v1.3.0-5B4CF0?style=flat-square" alt="Release v1.3.0" /></a>
+  <a href="https://github.com/ysr666/dsh-vision-router/releases/tag/v1.4.0"><img src="https://img.shields.io/badge/release-v1.4.0-5B4CF0?style=flat-square" alt="Release v1.4.0" /></a>
   <a href="tests"><img src="https://img.shields.io/badge/verified-149%20tests-2EA44F?style=flat-square" alt="Verified: 149 tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square" alt="License: MIT" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/Node.js-%3E%3D22-339933?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white" alt="Node.js >=22" /></a>
@@ -28,9 +28,9 @@
 <p align="center">💬 <strong>QQ 用户交流群：1105463028</strong></p>
 
 > [!WARNING]
-> 📌 **公告（v1.3.0）**
+> 📌 **公告（v1.4.0）**
 >
-> **v1.3.0**：增强长会话稳定性、诊断日志、视觉模型检测与多视觉插件共存。
+> **v1.4.0 现已支持**：未声明视觉模型的自动识别与直连桥接、doctor 修复过期版本钉住豁免、引导流程聚光灯高亮——并增强设置保存校验与视觉后端兼容性。
 
 <p align="center">
   <img src="assets/vision-demo.gif" width="640" alt="演示：粘贴图片，Agent 用 vision_ground / vision_crop / vision_pixel_diff 定位发送按钮并给出坐标" />
