@@ -315,6 +315,14 @@ test('the walkthrough walks step 1 (session model), step 2 (open settings), step
   // stays clickable, and animations respect reduced motion.
   assert.equal(source.includes('vr-guide-prompt-veiled'), true)
   assert.equal(source.includes('prefers-reduced-motion'), true)
+  // Step 2 also carries a Next button: it performs the current phase's
+  // action for the user (open the settings panel, then enter Plugins), so
+  // every non-final step can be driven entirely from the prompt.
+  assert.equal(source.includes("const currentPhase = guidePhase('step2')"), true)
+  assert.equal(source.includes('gear.click()'), true)
+  assert.equal(source.includes("row.tagName === 'BUTTON'"), true)
+  assert.equal(source.includes('也可以直接点「下一步」帮你打开'), true)
+  assert.equal(source.includes(', or press “Next” and I will open it for you'), true)
 })
 
 test('the settings card skips offscreen paint and rebuilds model options once', () => {
