@@ -293,6 +293,11 @@ export const Config = z.object({
   // Text-provider routes the user wants wrapped as image-capable twins
   // (e.g. opencode-go): each entry registers a "<provider>-vision" route
   // whose catalog mirrors the original models but declares image input.
+  // `reasoningEffort` (issue #103): some source routes advertise no
+  // reasoning.defaultEffort (pi-ai only emits one when the provider profile
+  // sets `reasoning`), which makes the host drop the persisted effort every
+  // time the twin is picked — only the first step of a turn thinks. Set it
+  // here to force a default for the twin's catalog entries.
   // 开箱预置一条 deepseek-official（与视觉模型链预置 vision-http 内置免费
   // 端点同理）：新用户在卡片里第一眼就能看到官方 DeepSeek 行可发图。该路由
   // 由插件内置包装（deepseek-vision）服务，syncTwins 跳过 ownRoutes，这条
@@ -302,6 +307,7 @@ export const Config = z.object({
       z.object({
         provider: z.string(),
         models: z.array(z.string()).default([]),
+        reasoningEffort: z.string().default(''),
       }),
     )
     .default([{ provider: 'deepseek-official', models: [] }]),
@@ -1951,7 +1957,16 @@ export function createNativeDeepSeekAdapter(ctx) {
  * vision_ground / ... itself, so image turns stay ordinary tool-calling text
  * turns with continuous multi-step operations.
  */
-export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, preserveImageInput }) {
+export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, preserveImageInput, defaultReasoningEffort }) {
+  // issue #103 (defense in depth): when the twin metadata lacks a reasoning
+  // default, the host can drop reasoningEffort from the later steps of a
+  // multi-step turn (only step 1 thinks). Remember the last explicitly seen
+  // effort per delegate and re-inject it when a later call arrives without
+  // one, so every step keeps reasoning. The vision chain never flows through
+  // this body and keeps its own reasoningEffort: undefined.
+  const lastReasoningEffort = new Map() // delegate provider -> last explicit effort
+  const fallbackReasoningEffort = () =>
+    typeof defaultReasoningEffort === 'function' ? defaultReasoningEffort() : defaultReasoningEffort
   return {
     async *stream(options) {
       const messages = options.messages ?? []
@@ -2006,8 +2021,20 @@ export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, pr
         })
         return result.changed ? { ...message, content: result.content } : message
       })
+      let effort = typeof options.reasoningEffort === 'string' && options.reasoningEffort !== ''
+        ? options.reasoningEffort
+        : undefined
+      if (effort !== undefined) {
+        lastReasoningEffort.set(delegateProvider, effort)
+      } else {
+        effort = lastReasoningEffort.get(delegateProvider)
+      }
+      if (effort === undefined) {
+        const fallback = fallbackReasoningEffort()
+        if (typeof fallback === 'string' && fallback !== '') effort = fallback
+      }
       yield* ctx.llm.stream({
-        ...options,
+        ...(effort === undefined ? options : { ...options, reasoningEffort: effort }),
         provider: delegateProvider,
         messages: rewritten,
       })
@@ -2817,6 +2844,30 @@ export function apply(ctx, config = {}) {
         return false
       }
     }
+    // issue #103: the twin mirrors the source metadata, and pi-ai routes only
+    // advertise reasoning.defaultEffort when the provider profile sets
+    // `reasoning`. Without a default the picker rebuild and the agent request
+    // hook drop the persisted effort whenever the twin is selected, so only
+    // the first step of a turn thinks. The twin therefore exposes a
+    // defaultEffort: the source's own when present, or the per-entry
+    // wrappedProviders[].reasoningEffort override when configured.
+    const configuredReasoningEffort = () => {
+      const entry = wrappedProviders().find((candidate) => candidate.provider === provider)
+      return entry && typeof entry.reasoningEffort === 'string' ? entry.reasoningEffort.trim() : ''
+    }
+    const withDefaultEffort = (model) => {
+      const configured = configuredReasoningEffort()
+      if (configured === '') return model
+      const reasoning = model && typeof model === 'object' ? model.reasoning : undefined
+      const efforts = reasoning && Array.isArray(reasoning.efforts) ? reasoning.efforts : []
+      if (efforts.length === 0) {
+        return { ...model, reasoning: { efforts: [configured], defaultEffort: configured } }
+      }
+      if (efforts.includes(configured)) {
+        return { ...model, reasoning: { ...reasoning, defaultEffort: configured } }
+      }
+      return { ...model, reasoning: { ...reasoning, efforts: [configured, ...efforts], defaultEffort: configured } }
+    }
     return {
       providerInfo() {
         const original = originalAdapter()
@@ -2845,7 +2896,9 @@ export function apply(ctx, config = {}) {
           const listed = await original.listModels(provider)
           return listed
             .filter((model) => models.length === 0 || models.includes(model.id))
-            .map((model) => ({ ...model, provider: twinRoute, inputModalities: ['text', 'image'] }))
+            .map((model) =>
+              withDefaultEffort({ ...model, provider: twinRoute, inputModalities: ['text', 'image'] }),
+            )
         } catch {
           return []
         }
@@ -2856,7 +2909,7 @@ export function apply(ctx, config = {}) {
           throw new Error(`vision-router: wrapped provider "${provider}" has no adapter registered yet`)
         }
         const base = await original.resolveModel(provider, model)
-        return { ...base, provider: twinRoute, inputModalities: ['text', 'image'] }
+        return withDefaultEffort({ ...base, provider: twinRoute, inputModalities: ['text', 'image'] })
       },
       ...createWrapperStreamBody(ctx, {
         imageMemory,
@@ -2865,6 +2918,9 @@ export function apply(ctx, config = {}) {
         // Keep that direct path intact and expose vision-router as optional
         // precision tools instead of forcing an image -> text detour.
         preserveImageInput: (options) => sourceAcceptsImages(options.model),
+        // issue #103 (defense in depth): even when the agent drops the effort
+        // between steps, re-inject the configured default for this twin.
+        defaultReasoningEffort: () => configuredReasoningEffort(),
       }),
     }
   }

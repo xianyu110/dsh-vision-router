@@ -1216,7 +1216,9 @@ test('stealth defaults to false (issue #34: explicit opt-in, no stealth takeover
 test('wrappedProviders pre-fills the stock deepseek-official row out of the box', () => {
   // like the vision chain pre-fills vision-http, the wrappers section ships
   // one visible default row so users see the built-in wrapper at first glance
-  assert.deepEqual(Config({}).wrappedProviders, [{ provider: 'deepseek-official', models: [] }])
+  assert.deepEqual(Config({}).wrappedProviders, [
+    { provider: 'deepseek-official', models: [], reasoningEffort: '' },
+  ])
 })
 
 
@@ -1502,6 +1504,173 @@ test('apply registers an image-capable twin route for wrappedProviders', async (
   assert.equal(delegateCall.provider, 'opencode-go')
   assert.equal(delegateCall.messages[0].content.filter((b) => b.type === 'image').length, 0)
   assert.ok(delegateCall.messages[0].content[0].text.includes('img-1'))
+})
+
+test('wrappedProviders reasoningEffort gives the twin a reasoning defaultEffort (issue #103)', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: {
+      wrappedProviders: [{ provider: 'opencode-go', models: ['deepseek-v4-flash'], reasoningEffort: 'max' }],
+    },
+  })
+  // pi-ai routes advertise efforts without a default when the provider
+  // profile does not set `reasoning` — the exact #103 trigger.
+  const piAiLike = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      {
+        provider: p, id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', inputModalities: ['text'],
+        reasoning: { efforts: ['off', 'high', 'max'] },
+      },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+      reasoning: { efforts: ['off', 'high', 'max'] },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], piAiLike)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const listed = await twin.listModels('opencode-go-vision')
+  assert.deepEqual(listed[0].reasoning, { efforts: ['off', 'high', 'max'], defaultEffort: 'max' })
+  const resolved = await twin.resolveModel('opencode-go-vision', 'deepseek-v4-flash')
+  assert.equal(resolved.reasoning.defaultEffort, 'max')
+  assert.deepEqual(resolved.reasoning.efforts, ['off', 'high', 'max'])
+})
+
+test('twin inherits the source defaultEffort when no reasoningEffort override is set', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const source = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      {
+        provider: p, id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', inputModalities: ['text'],
+        reasoning: { efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
+      },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+      reasoning: { efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], source)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const listed = await twin.listModels('opencode-go-vision')
+  assert.equal(listed[0].reasoning.defaultEffort, 'high')
+  assert.deepEqual(listed[0].reasoning.efforts, ['low', 'high', 'max'])
+  const resolved = await twin.resolveModel('opencode-go-vision', 'deepseek-v4-flash')
+  assert.equal(resolved.reasoning.defaultEffort, 'high')
+})
+
+test('twin wrapper re-injects the last explicit reasoningEffort on later steps (issue #103)', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const source = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'm', name: 'M', inputModalities: ['text'] },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], source)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const calls = []
+  ctx.llm.stream = async function* (options) {
+    calls.push({ ...options })
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const drain = async (options) => {
+    for await (const _c of twin.stream(options)) {
+      /* drain */
+    }
+  }
+  // step 1 carries the effort explicitly; the later steps arrive without it
+  // (the agent drops it once the twin metadata lacks a default) and must
+  // inherit the remembered value so every step keeps thinking.
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [], reasoningEffort: 'max' })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [], reasoningEffort: 'off' })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
+  assert.equal(calls[0].reasoningEffort, 'max')
+  assert.equal(calls[1].reasoningEffort, 'max')
+  assert.equal(calls[2].reasoningEffort, 'off')
+  assert.equal(calls[3].reasoningEffort, 'off')
+})
+
+test('twin wrapper uses the configured default when no effort was ever seen', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [], reasoningEffort: 'high' }] },
+  })
+  const source = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [{ provider: p, id: 'm', name: 'M', inputModalities: ['text'] }],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], source)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const calls = []
+  ctx.llm.stream = async function* (options) {
+    calls.push({ ...options })
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages: [] })) {
+    /* drain */
+  }
+  assert.equal(calls[0].reasoningEffort, 'high')
+})
+
+test('twin wrapper leaves the effort untouched when nothing was seen or configured', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const source = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [{ provider: p, id: 'm', name: 'M', inputModalities: ['text'] }],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], source)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const calls = []
+  ctx.llm.stream = async function* (options) {
+    calls.push({ ...options })
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages: [] })) {
+    /* drain */
+  }
+  assert.equal(calls[0].reasoningEffort, undefined)
 })
 
 test('twin route registers before its source adapter appears (live provider registration)', async () => {

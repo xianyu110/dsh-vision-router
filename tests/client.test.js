@@ -527,3 +527,25 @@ test('auto-discovered inferred vision models retain bridge capability state', ()
   assert.equal(source.includes('resolvedPiAiProfileOf'), true)
   assert.equal(source.includes("transport.api !== 'openai-completions'"), true)
 })
+
+test('wrappedProviders reasoningEffort: server schema, client syntax and editor (issue #103)', () => {
+  const clientSource = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const serverSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  // Server: the per-entry schema field feeds the twin's defaultEffort and the
+  // wrapper body's re-injection fallback.
+  assert.equal(serverSource.includes("reasoningEffort: z.string().default('')"), true)
+  assert.equal(serverSource.includes('const configuredReasoningEffort = () => {'), true)
+  assert.equal(serverSource.includes('defaultReasoningEffort: () => configuredReasoningEffort()'), true)
+  assert.equal(serverSource.includes('lastReasoningEffort.set(delegateProvider, effort)'), true)
+  // Client: the editor row carries the effort and folds it back per provider;
+  // the free-text shape accepts a trailing ` @ effort`.
+  assert.equal(clientSource.includes("wrapEffortDefault: '推理等级（默认继承）'"), true)
+  assert.equal(clientSource.includes("wrapEffortTitle: '该包装组缺少 reasoning.defaultEffort 时使用的推理等级'"), true)
+  assert.equal(clientSource.includes("wrapEffortDefault: 'Reasoning effort (inherit default)'"), true)
+  assert.equal(clientSource.includes("const at = line.lastIndexOf(' @ ')"), true)
+  assert.equal(clientSource.includes("reasoningEffort: entry.effort"), true)
+  assert.equal(clientSource.includes("['off', 'low', 'medium', 'high', 'max'].map((effort) => h('option'"), true)
+  // Copy documents the fix for both dictionaries.
+  assert.equal(clientSource.includes('行尾可加 ` @ max` 指定该组的推理等级默认值'), true)
+  assert.equal(clientSource.includes('append ` @ max` to set the group’s reasoning default'), true)
+})
