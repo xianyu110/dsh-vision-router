@@ -15,8 +15,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ysr666/dsh-vision-router/releases/tag/v1.4.1"><img src="https://img.shields.io/badge/release-v1.4.1-5B4CF0?style=flat-square" alt="Release v1.4.1" /></a>
-  <a href="tests"><img src="https://img.shields.io/badge/verified-149%20tests-2EA44F?style=flat-square" alt="Verified: 149 tests" /></a>
+  <a href="https://github.com/ysr666/dsh-vision-router/releases/tag/v1.4.2"><img src="https://img.shields.io/badge/release-v1.4.2-5B4CF0?style=flat-square" alt="Release v1.4.2" /></a>
+  <a href="tests"><img src="https://img.shields.io/badge/verified-252%20tests-2EA44F?style=flat-square" alt="Verified: 252 tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square" alt="License: MIT" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/Node.js-%3E%3D22-339933?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white" alt="Node.js >=22" /></a>
   <img src="https://img.shields.io/badge/runtime-no%20Python-8A2BE2?style=flat-square" alt="No Python" />
@@ -28,9 +28,9 @@
 <p align="center">💬 <strong>QQ community group: 1105463028</strong></p>
 
 > [!WARNING]
-> 📌 **Announcement (v1.4.1)**
+> 📌 **Announcement (v1.4.2)**
 >
-> **v1.4.1 now supports** hardened vision failure handling — a single broken vision backend (401 / 429 / outage) can no longer stall a text turn: circuit breaking, shared task budgets and structured failure results keep DeepSeek conversations moving.
+> **v1.4.2 now supports** Oh-DSH Desktop — the plugin no longer races the stock DeepSeek route on the bundled DSH 0.1.0-rc.5 runtime (fixes "DSH runtime exited before readiness"), opencode-go qwen3.6-plus vision calls reach the correct Anthropic endpoint, and "+ Auto Vision" twins keep the picker's reasoning effort across multi-step turns.
 
 <p align="center">
   <img src="assets/vision-demo.gif" width="640" alt="Demo: paste an image, the agent locates the send button with vision_ground / vision_crop / vision_pixel_diff and answers with coordinates" />
@@ -353,7 +353,7 @@ DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add dsh-vision-r
 (Windows PowerShell: run `$env:DSH_HOME = "$env:USERPROFILE\.ohdsh"` first, then the same command.)
 
 > [!WARNING]
-> Oh-DSH Desktop ≤ 0.1.5 bundles DSH `0.1.0-rc.5`. `dsh-vision-router` v1.4.1 and earlier crash that runtime at startup (`configurable provider "deepseek-official" is already declared`, surfacing as `DSH runtime exited before readiness`). Install v1.4.2+; until v1.4.2 is released, install the fix branch directly: `DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add github:ysr666/dsh-vision-router#fix/keep-alive-takeover-race`.
+> Oh-DSH Desktop ≤ 0.1.5 bundles DSH `0.1.0-rc.5`. `dsh-vision-router` v1.4.1 and earlier crash that runtime at startup (`configurable provider "deepseek-official" is already declared`, surfacing as `DSH runtime exited before readiness`). Install v1.4.2+.
 
 If a broken install already keeps the Desktop from starting, open `~/.ohdsh/profiles/desktop/package.json`, remove the `dsh-vision-router` entry from both `dependencies` and `dsh.profile.bundles`, save, and restart the Desktop.
 
