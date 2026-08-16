@@ -22,9 +22,9 @@ jobs:
           client = Path('lib/client.js')
           s = client.read_text()
           old_present = "{ name: 'tool.call.toolview', key: 'vision_present', inject: () => ({}) }"
-          new_present = "{ name: 'tool.call.toolview', key: 'vision_present', priority: 100, inject: () => ({}) }"
+          new_present = "{ name: 'tool.call.toolview', key: 'vision_present', priority: -10, inject: () => ({}) }"
           old_artifact = "{ name: 'tool.call.toolview', key, inject: () => ({}) }"
-          new_artifact = "{ name: 'tool.call.toolview', key, priority: 100, inject: () => ({}) }"
+          new_artifact = "{ name: 'tool.call.toolview', key, priority: -10, inject: () => ({}) }"
           assert s.count(old_present) == 1, s.count(old_present)
           assert s.count(old_artifact) == 1, s.count(old_artifact)
           s = s.replace(old_present, new_present).replace(old_artifact, new_artifact)
@@ -34,7 +34,7 @@ jobs:
           t = test.read_text()
           marker = "toolview cards use a non-default priority so other vision plugins can coexist (#91)"
           if marker not in t:
-              block = "\n\ntest('toolview cards use a non-default priority so other vision plugins can coexist (#91)', () => {\n  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')\n  // DSH keyed slots allow the same key at different priorities. Keep our\n  // presentation cards away from the default priority 0 used by other vision\n  // plugins (notably @anionex/dsh-vision-toolkit), so both plugins can load.\n  assert.equal(source.includes(\"key: 'vision_present', priority: 100\"), true)\n  assert.equal(source.includes(\"key, priority: 100, inject\"), true)\n})\n"
+              block = "\n\ntest('toolview cards use a non-default priority so other vision plugins can coexist (#91)', () => {\n  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')\n  // DSH keyed slots allow the same key at different priorities. Use a small\n  // negative priority so Vision Router keeps ownership of its own tool cards\n  // while coexisting with plugins that use the default priority 0.\n  assert.equal(source.includes(\"key: 'vision_present', priority: -10\"), true)\n  assert.equal(source.includes(\"key, priority: -10, inject\"), true)\n})\n"
               test.write_text(t + block)
           PY
       - name: Run focused client tests
