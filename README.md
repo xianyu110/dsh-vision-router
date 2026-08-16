@@ -76,21 +76,21 @@ Most DSH vision plugins bridge images to DeepSeek as *text descriptions* — los
 | Free out-of-the-box | ❌ | ❌ | ✅ built-in keyless endpoint |
 | Fits dsh composition | — | external server | ✅ one plugin row |
 
-**Difference from existing dsh community projects** (all excellent, each with its own focus):
+**Difference from existing dsh community projects** (all excellent, each with its own focus; descriptions reflect their READMEs as of 2026-08):
 
 | Project | Approach | What this plugin adds |
 |---|---|---|
-| [dsh-vision-sidecar](https://github.com/121103qwq/dsh-vision-sidecar) | Pre-describes images with an external VLM; the description joins the session as a message to DeepSeek; OVHcloud anonymous endpoint by default | Description bridge; this plugin adds raw-image routing, with `vision_describe` covering descriptions on demand |
+| [dsh-vision-sidecar](https://github.com/121103qwq/dsh-vision-sidecar) | Pre-describes images with an external VLM; the description joins the session as a message to DeepSeek; LLM7.io anonymous endpoint by default (OVHcloud listed as a no-key alternative) | Description bridge; this plugin adds raw-image routing, with `vision_describe` covering descriptions on demand |
 | [dsh-vision-proxy](https://github.com/Flyvhidbwo/dsh-vision-proxy) | Wraps a provider route and transcribes images into text in the request stream | Transcription bridge; this plugin wraps no provider — it rewrites routing through `agent/request` waterfalls |
-| [dsh-vision-provider](https://github.com/libinyam/dsh-vision-provider) | Config-only bundle registering an OpenAI-compatible multimodal route | Same config-layer idea; this plugin adds automatic routing, fallback chains and tools on top |
-| [modlens](https://github.com/liustack/modlens) | The first dsh vision plugin; reuses local Codex/OpenCode/Pi logins as vision engines | Engine-reuse idea; this plugin ships its own provider chain and depends on no other local CLI |
-| [dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) | Ten intent-aware visual tools (Q&A/OCR/pixel verification/UI restoration) | Broader tool set; this plugin focuses on routing + one general comparison tool, lighter |
-| [dsh-tool-vision](https://github.com/Scorp1o117/dsh-tool-vision) | An `inspect_image` tool plus an `llm/stream` waterfall image bridge | Similar waterfall bridge; this plugin adds turn routing, fallback chains, caching and the free endpoint |
+| [dsh-vision-provider](https://github.com/libinyam/dsh-vision-provider) | Registers `DeepSeek + Vision` combined routes: images are described by the chosen vision model before reaching DeepSeek | Two-model bridge idea; this plugin adds automatic routing, fallback chains and tools on top |
+| [modlens](https://github.com/liustack/modlens) | The first dsh vision plugin; reuses local Claude Code/Codex/OpenCode/Pi logins as vision engines | Engine-reuse idea; this plugin ships its own provider chain and depends on no other local CLI |
+| [dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) | Ten intent-aware visual tools (Q&A/OCR/pixel verification/UI restoration), called explicitly on demand | Broader tool set; this plugin adds whole-turn auto-routing and a keyless free fallback |
+| [dsh-tool-vision](https://github.com/Scorp1o117/dsh-tool-vision) | An `inspect_image` tool plus an `agent/pre-step` waterfall bridge (pasted images become tool hints before entering the log) | Similar waterfall bridge; this plugin adds turn routing, fallback chains, caching and the free endpoint |
 
 ## Acknowledgements
 
 This project borrows ideas from all of the above — especially the keyless free-endpoint
-discovery (OVHcloud AI Endpoints anonymous tier) by
+exploration (LLM7.io and OVHcloud anonymous tiers) by
 [dsh-vision-sidecar](https://github.com/121103qwq/dsh-vision-sidecar). Thanks to the authors of
 [dsh-vision-proxy](https://github.com/Flyvhidbwo/dsh-vision-proxy),
 [dsh-vision-provider](https://github.com/libinyam/dsh-vision-provider),
