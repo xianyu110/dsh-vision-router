@@ -1061,6 +1061,10 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
   const adapters = new Map() // provider -> adapter
   const registrations = new Map() // provider -> { adapter, retryPolicy }
   const captured = { skills: [], on: new Map() }
+  // The mutable user document and the watch seam: tests flip config0 fields
+  // and fire the watchers to simulate a settings-card save.
+  const userDoc = config0
+  const settingsWatchers = []
   if (stockRoute) {
     const stock = {
       providerInfo: (p) => ({ id: p, name: 'DeepSeek' }),
@@ -1103,13 +1107,21 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
     },
     inject(_deps, callback) {
       // settings seam: run synchronously against a mock settings service that
-      // resolves the composition entry through the Config schema defaults.
+      // mirrors the real one — schema defaults over the composition entry
+      // (apply's `config`, passed as `base`) over the user document (userDoc).
       const scope = {
-        get: () => ({ ...Config({}), ...config0 }),
-        watch: () => {},
+        get: () => ({ ...Config({}), ...userDoc }),
+        watch: (fn) => {
+          settingsWatchers.push(fn)
+        },
       }
       const sctx = {
-        settings: { register: () => scope },
+        settings: {
+          register: (_name, _schema, options) => {
+            const base = options && options.base ? options.base : {}
+            return { ...scope, get: () => ({ ...Config({}), ...base, ...userDoc }) }
+          },
+        },
         effect: () => () => {},
       }
       callback(sctx)
@@ -1128,8 +1140,15 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
           adapters.set(provider, adapter)
           registrations.set(provider, { adapter, retryPolicy: adapter.providerRetryPolicy(provider) })
         }
-        // mirror the real handle: callable disposer with a replace() sidecar
-        const handle = () => {}
+        // mirror the real handle: calling it disposes the registration
+        const handle = () => {
+          for (const provider of providers) {
+            if (adapters.get(provider) === adapter) adapters.delete(provider)
+            if (registrations.get(provider) && registrations.get(provider).adapter === adapter) {
+              registrations.delete(provider)
+            }
+          }
+        }
         handle.replace = () => {}
         return handle
       },
@@ -1167,7 +1186,7 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
       },
     },
   }
-  return { ctx, adapters, captured }
+  return { ctx, adapters, captured, userDoc, settingsWatchers }
 }
 
 test('apply registers the stealth deepseek-official route with the stock catalog', async () => {
@@ -1880,6 +1899,16 @@ test('apply falls back to the visible wrapper when the stock route is still acti
 
 test('wrapper lists the vision-chain pairs only when whole-turn routing is on', async () => {
   const { ctx, adapters } = mockHarnessCtx({ stockRoute: true, config0: { routing: true } })
+  ctx.llm.registerAdapter(['openrouter'], {
+    providerInfo: (p) => ({ id: p, name: 'OpenRouter' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'qwen/qwen3-vl-235b-a22b-instruct', name: 'Qwen3-VL', inputModalities: ['text', 'image'] },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text', 'image'], context: { contextWindow: 100000 },
+    }),
+  })
   apply(ctx, Config({
     provider: 'openrouter',
     providers: [{ provider: 'openrouter', model: 'qwen/qwen3-vl-235b-a22b-instruct' }],
@@ -1890,16 +1919,16 @@ test('wrapper lists the vision-chain pairs only when whole-turn routing is on', 
   assert.deepEqual(wrapped.map((m) => m.id), [
     'deepseek-v4-flash',
     'deepseek-v4-pro',
-    'vision-http/ovh/Qwen3.5-397B-A17B',
+    'openrouter/qwen/qwen3-vl-235b-a22b-instruct',
   ])
-  const visionEntry = wrapped.find((m) => m.id === 'vision-http/ovh/Qwen3.5-397B-A17B')
+  const visionEntry = wrapped.find((m) => m.id === 'openrouter/qwen/qwen3-vl-235b-a22b-instruct')
   assert.ok(visionEntry)
   assert.deepEqual(visionEntry.inputModalities, ['text', 'image'])
   assert.ok(String(visionEntry.name).includes('视觉'))
   // resolving a vision-pair entry still returns image-capable metadata
-  const resolved = await wrapper.resolveModel('deepseek-vision', 'vision-http/ovh/Qwen3.5-397B-A17B')
+  const resolved = await wrapper.resolveModel('deepseek-vision', 'openrouter/qwen/qwen3-vl-235b-a22b-instruct')
   assert.deepEqual(resolved.inputModalities, ['text', 'image'])
-  assert.equal(resolved.id, 'vision-http/ovh/Qwen3.5-397B-A17B')
+  assert.equal(resolved.id, 'openrouter/qwen/qwen3-vl-235b-a22b-instruct')
 })
 test('floodFillBackground clears border-connected background pixels', () => {
   // 4x4: white background, black 2x2 square in the middle
@@ -2786,4 +2815,39 @@ test('strict upstream: vision chain fails over when a forced extraVisionModels b
   assert.deepEqual(calls, ['forced', 'good'])
   assert.equal(chunks[chunks.length - 1].type, 'finish')
   assert.equal(chunks[chunks.length - 1].reason.kind, 'stop')
+})
+
+test('legacy routing mounts follow the settings document without a restart', async () => {
+  const { ctx, adapters, captured, userDoc, settingsWatchers } = mockHarnessCtx({
+    config0: { routing: false },
+  })
+  apply(ctx, Config({}))
+  // The agent/request hook is registered unconditionally and gates at
+  // runtime, so the settings switch reaches it immediately.
+  assert.equal(typeof captured.on.get('agent/request'), 'function')
+  assert.equal(adapters.has('vision-chain'), false, 'chain route off while routing is disabled')
+  // the user flips the routing switch in the settings card
+  userDoc.routing = true
+  for (const watch of settingsWatchers) watch()
+  assert.ok(adapters.has('vision-chain'), 'chain route mounts when routing turns on')
+  // and off again
+  userDoc.routing = false
+  for (const watch of settingsWatchers) watch()
+  assert.equal(adapters.has('vision-chain'), false, 'chain route unmounts when routing turns off')
+})
+
+test('wrapper route mount follows the settings wrapperRoute name', async () => {
+  const { ctx, adapters, userDoc, settingsWatchers } = mockHarnessCtx({
+    stockRoute: true,
+    config0: { wrapperRoute: '' },
+  })
+  apply(ctx, Config({}))
+  assert.equal(adapters.has('deepseek-vision'), false, 'no wrapper while the name is empty')
+  userDoc.wrapperRoute = 'deepseek-vision'
+  for (const watch of settingsWatchers) watch()
+  assert.ok(adapters.has('deepseek-vision'), 'wrapper mounts under the configured name')
+  userDoc.wrapperRoute = 'my-wrapper'
+  for (const watch of settingsWatchers) watch()
+  assert.equal(adapters.has('deepseek-vision'), false, 'old name is disposed')
+  assert.ok(adapters.has('my-wrapper'), 'wrapper re-mounts under the new name')
 })
