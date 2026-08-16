@@ -42,6 +42,7 @@
 - [How it compares](#how-it-compares)
 - [Acknowledgements](#acknowledgements)
 - [Quick start](#quick-start)
+- [Free vision key channels](#free-vision-key-channels)
 - [Highlights](#highlights)
 - [How it works](#how-it-works)
 - [Tools](#tools)
@@ -154,6 +155,27 @@ The built-in anonymous OVH vision fallback is already configured, so normal imag
   <img src="assets/dsh-conversation-image-qa-result.png" width="49%" alt="The agent's structured answer describing the image content." />
 </p>
 
+## Free vision key channels
+
+The built-in OVH fallback is anonymous by design, and OVH caps anonymous use at **2 requests/minute per IP per model**. If that feels tight, every channel below offers **free vision models with much higher quotas** — all of them are free to register, and none charges for the free tier. Free policies rotate often; treat this table as an August 2026 snapshot and double-check each provider's console before relying on it.
+
+| Channel | Free vision model(s) | Free quota | CN direct? | Where to get the key |
+|---|---|---|---|---|
+| OVHcloud AI Endpoints (access key) | `Qwen2.5-VL-72B-Instruct` — the same endpoint the built-in fallback uses | **400 req/min** per project per model (vs 2 anonymous) | ✅ | OVH account → Public Cloud project (attach a payment method; free models are not charged) → AI Endpoints access key |
+| Zhipu (bigmodel.cn) | `glm-4.6v-flash` · `glm-4.1v-thinking-flash` · `glm-4v-flash` — three permanently free models; chaining them triples capacity | uncapped tokens | ✅ | open.bigmodel.cn → API keys |
+| DashScope (Aliyun) | `qwen3-vl-flash` (limited-time free) and the Qwen-VL series | new users: 1M tokens per model series / 90 days | ✅ | bailian.console.aliyun.com |
+| Intern AI (Shanghai AI Lab) | `internvl-latest` · `internvl3.5-latest` | 30 RPM, **90M tokens/month** | ✅ | chat.intern-ai.org.cn |
+| Groq | `meta-llama/llama-4-scout-17b-16e-instruct` (native multimodal, up to 5 images) | 30 RPM / 14,400 req/day, no card | ❌ proxy | console.groq.com |
+| Google AI Studio | `gemini-2.5-flash` · `gemini-2.5-flash-lite` | 10–30 RPM / 500–1,500 req/day | ❌ proxy | aistudio.google.com |
+| NVIDIA NIM | `meta/llama-3.2-11b-vision-instruct` · `nvidia/nemotron-nano-12b-v2-vl` | 40 RPM, no card | ⚠️ | build.nvidia.com |
+| OpenCode Zen | `mimo-v2.5-free` (vision + code) | 30 RPM / 500 req/day | ⚠️ | opencode.ai/zen |
+| OpenRouter | `google/gemma-4-26b-a4b-it:free` · `google/gemma-4-31b-it:free` | 50 req/day on unpaid accounts | ❌ proxy | openrouter.ai |
+
+Any of these channels can join the vision chain as an `httpProviders` entry (key in the matching environment variable or `~/.dsh/.credentials.yaml`), and the chain tries your entries before the anonymous fallback.
+
+> [!NOTE]
+> Free-tier policies change without notice — Cerebras retired its free tier in July 2026 (now a one-time $5 credit), SambaNova's free tier is down to 20 requests/day, and Hugging Face's is $0.10/month. Third-party “`:free` relay” aggregators are deliberately not listed: they rotate quickly, lack SLAs, and some resell quota in ways that violate upstream terms.
+
 ## Highlights
 
 - **Original pixels, real answers.** The vision chain reads the image at original resolution (auto-downscaled only to protect latency/quota); the agent's question travels with the image, so answers are about *your* question, not a generic description.
@@ -234,49 +256,6 @@ The vision tools try backends in order and surface an error only after all of th
 > In the legacy `routing: true` mode, the whole-turn chain walks only `provider + fallbacks` — `httpProviders` (including the free fallback) do not participate there. The default `routing: false` (tools-first) tries everything.
 
 Failures are classified (region / tos / quota / rate-limit / context / network) and the final error carries advice; `429` responses honor `Retry-After` once with a capped backoff. Oversized uploads are downscaled before the call (default budget 4 MP) to keep tool calls fast.
-
-## Free vision key channels
-
-The built-in OVH fallback is anonymous by design, and OVH caps anonymous use at **2 requests/minute per IP per model**. If that feels tight, every channel below offers **free vision models with much higher quotas** — all of them are free to register, and none charges for the free tier. Free policies rotate often; treat this table as an August 2026 snapshot and double-check each provider's console before relying on it.
-
-| Channel | Free vision model(s) | Free quota | CN direct? | Where to get the key |
-|---|---|---|---|---|
-| OVHcloud AI Endpoints (access key) | `Qwen2.5-VL-72B-Instruct` — the same endpoint the built-in fallback uses | **400 req/min** per project per model (vs 2 anonymous) | ✅ | OVH account → Public Cloud project (attach a payment method; free models are not charged) → AI Endpoints access key |
-| Zhipu (bigmodel.cn) | `glm-4.6v-flash` · `glm-4.1v-thinking-flash` · `glm-4v-flash` — three permanently free models; chaining them triples capacity | uncapped tokens | ✅ | open.bigmodel.cn → API keys |
-| DashScope (Aliyun) | `qwen3-vl-flash` (limited-time free) and the Qwen-VL series | new users: 1M tokens per model series / 90 days | ✅ | bailian.console.aliyun.com |
-| Intern AI (Shanghai AI Lab) | `internvl-latest` · `internvl3.5-latest` | 30 RPM, **90M tokens/month** | ✅ | chat.intern-ai.org.cn |
-| Groq | `meta-llama/llama-4-scout-17b-16e-instruct` (native multimodal, up to 5 images) | 30 RPM / 14,400 req/day, no card | ❌ proxy | console.groq.com |
-| Google AI Studio | `gemini-2.5-flash` · `gemini-2.5-flash-lite` | 10–30 RPM / 500–1,500 req/day | ❌ proxy | aistudio.google.com |
-| NVIDIA NIM | `meta/llama-3.2-11b-vision-instruct` · `nvidia/nemotron-nano-12b-v2-vl` | 40 RPM, no card | ⚠️ | build.nvidia.com |
-| OpenCode Zen | `mimo-v2.5-free` (vision + code) | 30 RPM / 500 req/day | ⚠️ | opencode.ai/zen |
-| OpenRouter | `google/gemma-4-26b-a4b-it:free` · `google/gemma-4-31b-it:free` | 50 req/day on unpaid accounts | ❌ proxy | openrouter.ai |
-
-Any OpenAI-compatible channel joins the vision chain as an `httpProviders` entry. Put the key in the matching environment variable (or `~/.dsh/.credentials.yaml`), restart, and the chain tries your entries before the anonymous fallback:
-
-```yaml
-# ~/.dsh/settings.yaml — vision-router section (the same file the Web card writes)
-vision-router:
-  httpProviders:
-    - name: ovh-key          # same endpoint as the built-in fallback: 400/min with a key
-      baseURL: https://oai.endpoints.kepler.ai.cloud.ovh.net/v1
-      model: Qwen2.5-VL-72B-Instruct
-      apiKeyEnv: OVH_AI_ENDPOINTS_ACCESS_TOKEN
-    - name: zhipu
-      baseURL: https://open.bigmodel.cn/api/paas/v4
-      model: glm-4.6v-flash
-      apiKeyEnv: ZAI_API_KEY
-    - name: intern-ai
-      baseURL: https://chat.intern-ai.org.cn/api/v1
-      model: internvl-latest
-      apiKeyEnv: INTERN_AI_API_KEY
-    - name: groq
-      baseURL: https://api.groq.com/openai/v1
-      model: meta-llama/llama-4-scout-17b-16e-instruct
-      apiKeyEnv: GROQ_API_KEY
-```
-
-> [!NOTE]
-> Free-tier policies change without notice — Cerebras retired its free tier in July 2026 (now a one-time $5 credit), SambaNova's free tier is down to 20 requests/day, and Hugging Face's is $0.10/month. Third-party “`:free` relay” aggregators are deliberately not listed: they rotate quickly, lack SLAs, and some resell quota in ways that violate upstream terms.
 
 ## Stealth mode
 
