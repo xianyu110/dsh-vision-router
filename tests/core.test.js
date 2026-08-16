@@ -1155,6 +1155,13 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
         if (hit === undefined || typeof hit.adapter.listModels !== 'function') return []
         return hit.adapter.listModels(provider)
       },
+      async resolveModelInfo(provider, model) {
+        const hit = registrations.get(provider)
+        if (hit === undefined || typeof hit.adapter.resolveModel !== 'function') {
+          throw new Error(`no adapter registered for provider "${provider}"`)
+        }
+        return hit.adapter.resolveModel(provider, model)
+      },
       stream: async function* () {
         yield { type: 'finish', reason: { kind: 'stop' } }
       },
@@ -2607,4 +2614,176 @@ test('channel bridge transport uses resolved pi-ai catalog model facts', () => {
       apiKeyEnv: undefined,
     },
   )
+})
+
+// ── strict-upstream audit (#103 follow-up) ─────────────────────────────────
+// The plugin fabricates capability hints (twin reasoning defaults, image
+// declarations on wrapper routes, extraVisionModels overrides). These tests
+// run a STRICT upstream that throws on anything it cannot actually handle,
+// proving nothing fabricated is ever forwarded unsafely.
+
+test('strict upstream: twin forwards only supported reasoning efforts', async () => {
+  const supported = new Set(['off', 'high', 'max'])
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [], reasoningEffort: 'max' }] },
+  })
+  const strict = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'm', name: 'M', inputModalities: ['text'], reasoning: { efforts: [...supported] } },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+      reasoning: { efforts: [...supported] },
+    }),
+  }
+  ctx.llm.registerAdapter(['opencode-go'], strict)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const seen = []
+  ctx.llm.stream = async function* (options) {
+    if (options.reasoningEffort !== undefined && !supported.has(options.reasoningEffort)) {
+      throw new Error(`strict upstream rejects reasoningEffort "${options.reasoningEffort}"`)
+    }
+    seen.push(options.reasoningEffort)
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const drain = async (options) => {
+    for await (const _c of twin.stream(options)) {
+      /* drain */
+    }
+  }
+  // configured default, explicit selection, and the remembered re-injection
+  // must all resolve to the supported 'max'
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [], reasoningEffort: 'max' })
+  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
+  assert.deepEqual(seen, ['max', 'max', 'max'])
+})
+
+test('strict upstream: an unsupported configured effort is never forwarded', async () => {
+  const supported = new Set(['off', 'high', 'max'])
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [], reasoningEffort: 'medium' }] },
+  })
+  const strict = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'm', name: 'M', inputModalities: ['text'], reasoning: { efforts: [...supported] } },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+      reasoning: { efforts: [...supported] },
+    }),
+  }
+  ctx.llm.registerAdapter(['opencode-go'], strict)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const seen = []
+  ctx.llm.stream = async function* (options) {
+    if (options.reasoningEffort !== undefined && !supported.has(options.reasoningEffort)) {
+      throw new Error(`strict upstream rejects reasoningEffort "${options.reasoningEffort}"`)
+    }
+    seen.push(options.reasoningEffort)
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages: [] })) {
+    /* drain */
+  }
+  assert.deepEqual(seen, [undefined])
+})
+
+test('strict upstream: twin never leaks image blocks to a text-only source', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
+  })
+  const strict = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      { provider: p, id: 'm', name: 'M', inputModalities: ['text'] },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+  }
+  ctx.llm.registerAdapter(['opencode-go'], strict)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  const seen = []
+  ctx.llm.stream = async function* (options) {
+    const flattened = JSON.stringify(options.messages)
+    if (flattened.includes('"type":"image"')) {
+      throw new Error('strict upstream rejects image blocks')
+    }
+    seen.push(options)
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const messages = [
+    { role: 'user', content: [{ type: 'image', attachment: { attachmentId: 'img-1', name: 'a.png' } }, { type: 'text', text: '看这张图' }] },
+  ]
+  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages })) {
+    /* drain */
+  }
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].messages[0].content.filter((b) => b.type === 'image').length, 0)
+})
+
+test('strict upstream: vision chain fails over when a forced extraVisionModels backend rejects the image', async () => {
+  // The chain route is an eager composition-level opt-in (registered while
+  // apply() still reads the composition config), while its pair list is read
+  // lazily from the settings scope — supply both layers.
+  const chainConfig = {
+    routing: true,
+    chainRoute: 'vision-chain',
+    providers: [
+      { provider: 'forced', model: 'fake-vl' },
+      { provider: 'good', model: 'qwen-vl' },
+    ],
+    // The expert escape hatch forces a text-only model into the chain —
+    // the strict upstream rejects it, and the chain must fall through to
+    // the genuinely image-capable backend.
+    extraVisionModels: ['forced/fake-vl'],
+  }
+  const { ctx, adapters } = mockHarnessCtx({ config0: chainConfig })
+  const forced = {
+    providerInfo: (p) => ({ id: p, name: 'Forced' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [{ provider: p, id: 'fake-vl', name: 'Fake-VL', inputModalities: ['text'] }],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+    }),
+  }
+  const good = {
+    providerInfo: (p) => ({ id: p, name: 'Good' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [{ provider: p, id: 'qwen-vl', name: 'Qwen-VL', inputModalities: ['text', 'image'] }],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text', 'image'], context: { contextWindow: 100000 },
+    }),
+  }
+  ctx.llm.registerAdapter(['forced'], forced)
+  ctx.llm.registerAdapter(['good'], good)
+  apply(ctx, Config(chainConfig))
+  const chain = adapters.get('vision-chain')
+  assert.ok(chain, 'expected the vision chain route')
+  const calls = []
+  ctx.llm.stream = async function* (options) {
+    calls.push(options.provider)
+    if (options.provider === 'forced') throw new Error('forced backend rejects images')
+    yield { type: 'text', text: 'ok' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const messages = [
+    { role: 'user', content: [{ type: 'image', attachment: { attachmentId: 'img-1', name: 'a.png' } }, { type: 'text', text: '看' }] },
+  ]
+  const chunks = []
+  for await (const chunk of chain.stream({ provider: 'vision-chain', model: 'forced/fake-vl', messages })) {
+    chunks.push(chunk)
+  }
+  assert.deepEqual(calls, ['forced', 'good'])
+  assert.equal(chunks[chunks.length - 1].type, 'finish')
+  assert.equal(chunks[chunks.length - 1].reason.kind, 'stop')
 })
