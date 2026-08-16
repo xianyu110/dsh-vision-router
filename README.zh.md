@@ -15,8 +15,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ysr666/dsh-vision-router/releases/tag/v1.4.1"><img src="https://img.shields.io/badge/release-v1.4.1-5B4CF0?style=flat-square" alt="Release v1.4.1" /></a>
-  <a href="tests"><img src="https://img.shields.io/badge/verified-149%20tests-2EA44F?style=flat-square" alt="Verified: 149 tests" /></a>
+  <a href="https://github.com/ysr666/dsh-vision-router/releases/tag/v1.4.2"><img src="https://img.shields.io/badge/release-v1.4.2-5B4CF0?style=flat-square" alt="Release v1.4.2" /></a>
+  <a href="tests"><img src="https://img.shields.io/badge/verified-252%20tests-2EA44F?style=flat-square" alt="Verified: 252 tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square" alt="License: MIT" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/Node.js-%3E%3D22-339933?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white" alt="Node.js >=22" /></a>
   <img src="https://img.shields.io/badge/runtime-no%20Python-8A2BE2?style=flat-square" alt="No Python" />
@@ -28,9 +28,9 @@
 <p align="center">💬 <strong>QQ 用户交流群：1105463028</strong></p>
 
 > [!WARNING]
-> 📌 **公告（v1.4.1）**
+> 📌 **公告（v1.4.2）**
 >
-> **v1.4.1 现已支持**：视觉失败链加固——单个视觉后端（401 / 429 / 故障）不再拖垮文本对话；熔断、共享任务预算与结构化失败结果让对话始终顺畅继续。
+> **v1.4.2 现已支持**：Oh-DSH Desktop 兼容——在内置的 DSH 0.1.0-rc.5 上不再与官方 DeepSeek 路由竞争导致启动崩溃（修复「DSH runtime exited before readiness」）；opencode-go qwen3.6-plus 视觉调用走正确的 Anthropic 端点；「+ 自动识图」twin 组在多步对话中保留选择器里的推理等级。
 
 <p align="center">
   <img src="assets/vision-demo.gif" width="640" alt="演示：粘贴图片，Agent 用 vision_ground / vision_crop / vision_pixel_diff 定位发送按钮并给出坐标" />
@@ -351,7 +351,7 @@ DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add dsh-vision-r
 （Windows PowerShell 先执行 `$env:DSH_HOME = "$env:USERPROFILE\.ohdsh"`，再运行同一命令。）
 
 > [!WARNING]
-> Oh-DSH Desktop ≤ 0.1.5 内置的是 DSH `0.1.0-rc.5`。`dsh-vision-router` v1.4.1 及更早版本会让该运行时在启动时崩溃（报 `configurable provider "deepseek-official" is already declared`，在 Oh-DSH Desktop 里表现为 `DSH runtime exited before readiness`）。请安装 v1.4.2+；在 v1.4.2 发布之前，可直接安装修复分支：`DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add github:ysr666/dsh-vision-router#fix/keep-alive-takeover-race`。
+> Oh-DSH Desktop ≤ 0.1.5 内置的是 DSH `0.1.0-rc.5`。`dsh-vision-router` v1.4.1 及更早版本会让该运行时在启动时崩溃（报 `configurable provider "deepseek-official" is already declared`，在 Oh-DSH Desktop 里表现为 `DSH runtime exited before readiness`）。请安装 v1.4.2+。
 
 如果错误安装已经导致 Desktop 无法启动：打开 `~/.ohdsh/profiles/desktop/package.json`，从 `dependencies` 和 `dsh.profile.bundles` 中删掉 `dsh-vision-router` 条目，保存后重启 Desktop。
 
