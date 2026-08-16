@@ -1,0 +1,79 @@
+name: temp-publish-v1.4.3
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v1.4.3
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org/'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - name: Verify release metadata
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          test "$VERSION" = "1.4.3"
+          for f in README.md README.zh.md; do
+            grep -q "v$VERSION" "$f" || { echo "$f missing v$VERSION announcement" >&2; exit 1; }
+          done
+          awk -v v="v$VERSION" '$0 == "## " v { found=1 } END { exit found ? 0 : 1 }' CHANGELOG.md
+      - name: Publish to npm if needed
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "dsh-vision-router@$VERSION" version >/dev/null 2>&1; then
+            echo "dsh-vision-router@$VERSION already published"
+          else
+            npm publish --provenance --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Compose bilingual release notes
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          {
+            echo "# v$VERSION"
+            echo
+          } > release-notes.md
+          awk -v v="v$VERSION" '$0 == "## " v { flag=1; next } /^## / && flag { exit } flag' CHANGELOG.md >> release-notes.md
+          {
+            echo
+            echo "## Commits"
+            echo
+          } >> release-notes.md
+          PREV_TAG=$(git describe --tags --abbrev=0 "v$VERSION"^ 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            git log --pretty=format:'- %s' "$PREV_TAG..HEAD" >> release-notes.md
+          else
+            git log --pretty=format:'- %s' >> release-notes.md
+          fi
+      - name: Create GitHub Release if needed
+        shell: bash
+        run: |
+          if gh release view v1.4.3 >/dev/null 2>&1; then
+            echo "GitHub Release v1.4.3 already exists"
+          else
+            gh release create v1.4.3 --title v1.4.3 --notes-file release-notes.md
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
