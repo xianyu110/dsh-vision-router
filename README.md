@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ysr666/dsh-vision-router/releases/tag/v1.4.3"><img src="https://img.shields.io/badge/release-v1.4.3-5B4CF0?style=flat-square" alt="Release v1.4.3" /></a>
+  <a href="https://github.com/ysr666/dsh-vision-router/releases/tag/v1.4.4"><img src="https://img.shields.io/badge/release-v1.4.4-5B4CF0?style=flat-square" alt="Release v1.4.4" /></a>
   <a href="tests"><img src="https://img.shields.io/badge/verified-257%20tests-2EA44F?style=flat-square" alt="Verified: 257 tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square" alt="License: MIT" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/Node.js-%3E%3D22-339933?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white" alt="Node.js >=22" /></a>
@@ -28,9 +28,9 @@
 <p align="center">💬 <strong>QQ community group: 1105463028</strong></p>
 
 > [!WARNING]
-> 📌 **Announcement (v1.4.3)**
+> 📌 **Announcement (v1.4.4)**
 >
-> **v1.4.3:** Custom vision backends are runtime-verified instead of blocked by DSH capability metadata, including WebSocket/private transports.
+> **v1.4.4:** Fixes the blank DSH rc.6 plugin settings page by declaring the client services required by settingsScope.
 
 <p align="center">
   <img src="assets/vision-demo.gif" width="640" alt="Demo: paste an image, the agent locates the send button with vision_ground / vision_crop / vision_pixel_diff and answers with coordinates" />

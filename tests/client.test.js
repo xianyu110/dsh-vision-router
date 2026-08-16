@@ -67,7 +67,7 @@ test('filterVisionBackendGroups keeps callable generative models and hides only 
 
 test('the client bundle still loads and registers with the proven injects', () => {
   const bundle = loadClientBundle()
-  assert.deepEqual(bundle.inject, ['settingsScope', 'slots', 'locale', 'sessions'])
+  assert.deepEqual(bundle.inject, ['settingsScope', 'slots', 'locale', 'sessions', 'connection', 'remote'])
   assert.equal(typeof bundle.apply, 'function')
 })
 
