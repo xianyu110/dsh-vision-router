@@ -1,0 +1,52 @@
+name: Publish v1.4.4 hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v1.4.4.yml'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v1.4.4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org/'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - name: Publish npm if needed
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm view dsh-vision-router@1.4.4 version >/dev/null 2>&1; then
+            echo 'dsh-vision-router@1.4.4 is already published.'
+          else
+            npm publish --provenance --access public
+          fi
+      - name: Create GitHub release if needed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view v1.4.4 >/dev/null 2>&1; then
+            echo 'GitHub release v1.4.4 already exists.'
+            exit 0
+          fi
+          awk '
+            /^## v1\.4\.4$/ {found=1; next}
+            found && /^## v/ {exit}
+            found {print}
+          ' CHANGELOG.md > release-notes.md
+          gh release create v1.4.4 --title v1.4.4 --notes-file release-notes.md --verify-tag
