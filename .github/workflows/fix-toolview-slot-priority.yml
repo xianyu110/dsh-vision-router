@@ -34,18 +34,8 @@ jobs:
           t = test.read_text()
           marker = "toolview cards use a non-default priority so other vision plugins can coexist (#91)"
           if marker not in t:
-              t += """
-
-test('toolview cards use a non-default priority so other vision plugins can coexist (#91)', () => {
-  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  // DSH keyed slots allow the same key at different priorities. Keep our
-  // presentation cards away from the default priority 0 used by other vision
-  // plugins (notably @anionex/dsh-vision-toolkit), so both plugins can load.
-  assert.equal(source.includes("key: 'vision_present', priority: 100"), true)
-  assert.equal(source.includes("key, priority: 100, inject"), true)
-})
-"""
-              test.write_text(t)
+              block = "\n\ntest('toolview cards use a non-default priority so other vision plugins can coexist (#91)', () => {\n  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')\n  // DSH keyed slots allow the same key at different priorities. Keep our\n  // presentation cards away from the default priority 0 used by other vision\n  // plugins (notably @anionex/dsh-vision-toolkit), so both plugins can load.\n  assert.equal(source.includes(\"key: 'vision_present', priority: 100\"), true)\n  assert.equal(source.includes(\"key, priority: 100, inject\"), true)\n})\n"
+              test.write_text(t + block)
           PY
       - name: Run focused client tests
         run: node --test tests/client.test.js
