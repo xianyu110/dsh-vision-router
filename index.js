@@ -2439,12 +2439,26 @@ export function apply(ctx, config = {}) {
   // ourselves is the only way to keep the DeepSeek models in the picker.
   // The settings card surfaces this condition as a hint, and re-enabling
   // the stock row restores the fully official route.
-  const officialRouteAlive = adapterAvailable(ctx.llm, 'deepseek-official')
-  const takeoverReason = stealthEnabled ? 'stealth' : officialRouteAlive ? undefined : 'official-unavailable'
+  //
+  // The takeover decision runs AFTER a short settle window, never inside
+  // apply(): entry activation is service-driven, so this row can apply
+  // BEFORE the stock llm-deepseek row (reproduced on DSH 0.1.0-rc.5 hosts,
+  // e.g. Oh-DSH Desktop). Deciding synchronously misreads the not-yet-applied
+  // stock route as dead, and our directory registration then makes the stock
+  // row's own registration throw DUPLICATE_DIRECTORY, killing the whole
+  // runtime before readiness. Once the window elapses, a registered stock
+  // route means hands off; a still-dead route means the row is genuinely
+  // absent/disabled and the takeover is safe.
+  const KEEPALIVE_SETTLE_MS = 2000
   const nativeRoute = 'deepseek-official-native'
   let stealthActive = false
+  let takeoverReason
   let nativeAdapter
-  if (takeoverReason !== undefined) {
+  let takeoverAttempted = false
+  const attemptTakeover = (reason) => {
+    if (takeoverAttempted) return
+    takeoverAttempted = true
+    takeoverReason = reason
     try {
       nativeAdapter = createNativeDeepSeekAdapter(ctx)
       const nativeHandle = ctx.llm.registerAdapter([nativeRoute], {
@@ -2492,14 +2506,33 @@ export function apply(ctx, config = {}) {
         /* the stock row may still own the directory entry */
       }
     } catch (error) {
+      nativeAdapter = undefined
       stealthActive = false
       ctx.logger?.warn(
         'vision-router: deepseek-official takeover skipped (%s: %s); keeping the visible wrapper',
-        takeoverReason,
+        reason,
         error && error.message ? error.message : String(error),
       )
     }
   }
+  const maybeTakeover = () => {
+    if (!takeoverSettled || stealthActive || takeoverAttempted) return
+    if (adapterAvailable(ctx.llm, 'deepseek-official')) {
+      if (stealthEnabled) {
+        ctx.logger?.warn(
+          'vision-router: stealth is enabled but the stock deepseek-official route is alive; disable the llm-deepseek row to take it over',
+        )
+      }
+      return
+    }
+    attemptTakeover(stealthEnabled ? 'stealth' : 'official-unavailable')
+  }
+  let takeoverSettled = false
+  const settleTimer = setTimeout(() => {
+    takeoverSettled = true
+    maybeTakeover()
+  }, KEEPALIVE_SETTLE_MS)
+  ctx.effect(() => () => clearTimeout(settleTimer), 'vision-router: takeover settle timer')
   // ── vision-http route: first-class llm route over the OpenAI-compatible
   // http providers. The built-in OVHcloud anonymous endpoint (no account, no
   // key, 2 req/min/IP) is the DEFAULT vision model, so a fresh install works
