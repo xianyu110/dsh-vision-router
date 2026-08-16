@@ -323,6 +323,13 @@ test('the walkthrough walks step 1 (session model), step 2 (open settings), step
   assert.equal(source.includes("row.tagName === 'BUTTON'"), true)
   assert.equal(source.includes('也可以直接点「下一步」帮你打开'), true)
   assert.equal(source.includes(', or press “Next” and I will open it for you'), true)
+  // Anchoring correctness: the prompt must never cover the highlighted
+  // target (coverage is judged on the viewport-clamped box, with a small
+  // halo around the target), and the arrow must sit on the prompt's edge
+  // that faces the target — above the target means a bottom arrow, etc.
+  assert.equal(source.includes('Judge coverage on the CLAMPED box'), true)
+  assert.equal(source.includes('const halo = 10'), true)
+  assert.equal(source.includes("{ top: 'bottom', bottom: 'top', left: 'right', right: 'left' }"), true)
 })
 
 test('the settings card skips offscreen paint and rebuilds model options once', () => {
