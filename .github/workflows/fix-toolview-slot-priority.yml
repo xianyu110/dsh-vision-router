@@ -39,11 +39,11 @@ jobs:
           PY
       - name: Run focused client tests
         run: node --test tests/client.test.js
-      - name: Commit fix and remove one-shot workflow
+      - name: Commit fix on a review branch and remove one-shot workflow
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git rm .github/workflows/fix-toolview-slot-priority.yml
           git add lib/client.js tests/client.test.js
           git commit -m "fix: avoid toolview slot collisions with other vision plugins (#91)"
-          git push
+          git push origin HEAD:fix/issue-91-toolview-priority --force
