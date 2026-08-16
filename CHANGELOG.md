@@ -3,6 +3,13 @@
 每个版本的中英双语发布说明（GitHub Release 工作流从这里取对应版本的段落，发布前必须先写好本节）｜
 Bilingual (Chinese + English) release notes for every version — the GitHub Release workflow pulls the matching section from this file, so it must be filled in before tagging.
 
+## Unreleased
+
+### 修复 / Fixed
+
+- **OpenCode Go 的 Qwen 识图模型不再被网关换成 MiniMax M3**：用户反馈 `opencode-go/qwen3.6-plus` 作识图模型时实际调用的是 MiniMax M3——根因是已安装的 pi-ai 目录把 Qwen3.6 Plus 分类为 OpenAI 协议（`/v1/chat/completions`），而 OpenCode Go 官方只在 Anthropic `/v1/messages` 上提供该模型（同病相怜的还有 `minimax-m2.7`），错误端点上的请求被网关落到默认模型。插件新增内置目录纠错（`catalogCorrections`，默认开启）：当解析出的目录条目仍指向错误协议时，该后端改由插件直连正确协议应答（Anthropic Messages + 渠道自身凭据）；上游目录修复、或用户把路由指向自己的网关后，纠错自动失效，回到正常 harness 路径。新增 12 个测试覆盖纠错判定、Anthropic 请求构造、整轮链路的端到端接管与自动失效。
+- **OpenCode Go Qwen vision models are no longer served as MiniMax M3**: users reported that picking `opencode-go/qwen3.6-plus` as the vision backend actually invoked MiniMax M3 — the installed pi-ai catalog classifies Qwen3.6 Plus as OpenAI protocol (`/v1/chat/completions`), but OpenCode Go only serves it over the Anthropic `/v1/messages` endpoint (`minimax-m2.7` is misclassified the same way), so the gateway falls back to a default model on the wrong endpoint. The plugin now ships built-in catalog-routing corrections (`catalogCorrections`, on by default): while the resolved catalog entry still points at the wrong protocol, the backend is answered directly over the corrected one (Anthropic Messages with the channel's own credential); the moment upstream fixes the catalog — or the user points the route at their own gateway — the correction disarms itself and the normal harness path resumes. 12 new tests cover the decision table, the Anthropic request shape, and end-to-end chain take-over and auto-disarm.
+
 ## v1.4.1
 
 ### 改进 / Changed

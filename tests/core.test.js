@@ -1057,7 +1057,7 @@ test('stealth stream keeps the log intact and hands the model a tool-hint marker
 // plugin). These tests apply the full plugin against a harness-shaped mock
 // ctx, so ordering bugs inside apply() fail loudly here instead of at boot.
 
-function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {}) {
+function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false, attachments = false, opencodeGo = false } = {}) {
   const adapters = new Map() // provider -> adapter
   const registrations = new Map() // provider -> { adapter, retryPolicy }
   const captured = { skills: [], on: new Map() }
@@ -1083,10 +1083,61 @@ function mockHarnessCtx({ stockRoute = false, config0 = {}, skills = false } = {
     adapters.set('deepseek-official', stock)
     registrations.set('deepseek-official', { adapter: stock, retryPolicy: 'retry' })
   }
+  if (opencodeGo) {
+    // A pi-ai-shaped adapter for the opencode-go route: the catalog-correction
+    // seam feature-detects `adapter.config.profiles().get(provider).piProvider`.
+    // `opencodeGo === 'fixed'` serves the upstream-fixed catalog (anthropic),
+    // so corrections must stand down and the harness path keeps the call.
+    const piProfile = {
+      piProvider: {
+        auth: { apiKey: { resolve: async () => ({ auth: { apiKey: 'sk-opencode' } }) } },
+        getModels: () =>
+          opencodeGo === 'fixed'
+            ? [{ id: 'qwen3.6-plus', api: 'anthropic-messages', baseUrl: 'https://opencode.ai/zen/go' }]
+            : [{ id: 'qwen3.6-plus', api: 'openai-completions', baseUrl: 'https://opencode.ai/zen/go/v1' }],
+      },
+    }
+    const adapter = {
+      config: {
+        profiles: () => {
+          const map = new Map()
+          map.set('opencode-go', piProfile)
+          return map
+        },
+      },
+      providerInfo: (p) => ({ id: p, name: 'OpenCode Go' }),
+      providerRetryPolicy: () => undefined,
+      listModels: async (p) => [
+        { provider: p, id: 'qwen3.6-plus', name: 'Qwen3.6 Plus', inputModalities: ['text', 'image'] },
+      ],
+      resolveModel: async (p, m) => ({
+        provider: p,
+        id: m,
+        name: m,
+        inputModalities: ['text', 'image'],
+        context: { contextWindow: 1000000 },
+      }),
+      stream: async function* () {
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    }
+    adapters.set('opencode-go', adapter)
+    registrations.set('opencode-go', { adapter, retryPolicy: undefined })
+  }
   const ctx = {
     get(name) {
       if (name === 'settings') return { get: () => undefined }
       if (name === 'credentials') return { resolve: async () => ({ value: 'sk-test' }) }
+      if (name === 'attachments' && attachments) {
+        return {
+          readImage: async (ref) => ({ ref, data: Buffer.from('not-a-real-image') }),
+          saveImage: async ({ data, mediaType, name }) => ({
+            attachmentId: `saved-${data.length}`,
+            mediaType,
+            name,
+          }),
+        }
+      }
       if (name === 'skills' && skills) {
         return {
           register: (skill) => {
@@ -1279,6 +1330,110 @@ test('stealth off + alive stock route performs no takeover at all', async () => 
   const listed = await stock.listModels('deepseek-official')
   assert.deepEqual(listed[0].inputModalities, ['text'])
   assert.ok(adapters.has('deepseek-vision'), 'expected the visible wrapper route')
+})
+
+// ── catalog routing corrections (issue: opencode-go qwen3.6-plus) ──────────
+//
+// The pi-ai catalog routes opencode-go/qwen3.6-plus to openai-completions
+// while the gateway only serves it on /v1/messages; the correction dispatches
+// the pair directly over the Anthropic protocol and stands down the moment
+// the resolved catalog agrees.
+
+const opencodeGoChainConfig = {
+  providers: [{ provider: 'opencode-go', model: 'qwen3.6-plus' }],
+  routing: true,
+}
+
+test('catalog correction answers opencode-go/qwen3.6-plus on the Anthropic endpoint', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    opencodeGo: true,
+    attachments: true,
+    config0: opencodeGoChainConfig,
+  })
+  apply(ctx, Config(opencodeGoChainConfig))
+  const chain = adapters.get('vision-chain')
+  assert.ok(chain, 'expected the vision chain route with routing: true')
+
+  const original = globalThis.fetch
+  let captured
+  globalThis.fetch = async (url, init) => {
+    captured = { url: String(url), headers: init.headers, body: JSON.parse(init.body) }
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: 'OK' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const chunks = []
+    for await (const chunk of chain.stream({
+      provider: 'vision-chain',
+      model: 'opencode-go/qwen3.6-plus',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image', attachment: { attachmentId: 'img-1', mediaType: 'image/png' } },
+            { type: 'text', text: 'What is this?' },
+          ],
+        },
+      ],
+    })) {
+      chunks.push(chunk)
+    }
+    // The call went straight to the Anthropic Messages endpoint, not through
+    // the harness adapter's openai-completions route.
+    assert.equal(captured.url, 'https://opencode.ai/zen/go/v1/messages')
+    assert.equal(captured.headers['x-api-key'], 'sk-opencode')
+    assert.equal(captured.headers['anthropic-version'], '2023-06-01')
+    assert.equal(captured.body.model, 'qwen3.6-plus')
+    assert.ok(
+      captured.body.messages[0].content.some((block) => block.type === 'image'),
+      'expected the image to reach the Anthropic payload as a base64 block',
+    )
+    const text = chunks
+      .filter((chunk) => chunk.type === 'text-delta')
+      .map((chunk) => chunk.text)
+      .join('')
+    assert.equal(text, 'OK')
+    assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+test('the correction stands down once the catalog routes the pair correctly', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    opencodeGo: 'fixed',
+    attachments: true,
+    config0: opencodeGoChainConfig,
+  })
+  apply(ctx, Config(opencodeGoChainConfig))
+  const chain = adapters.get('vision-chain')
+  assert.ok(chain)
+
+  const original = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async (url, init) => {
+    fetchCalls += 1
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: 'SHOULD NOT RUN' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const chunks = []
+    for await (const chunk of chain.stream({
+      provider: 'vision-chain',
+      model: 'opencode-go/qwen3.6-plus',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'What is this?' }] }],
+    })) {
+      chunks.push(chunk)
+    }
+    assert.equal(fetchCalls, 0, 'the corrected Anthropic path must not run once upstream is fixed')
+    assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+  } finally {
+    globalThis.fetch = original
+  }
 })
 
 // ── legacy routing fallback (routing: true, chainRoute: '') ────────────────
