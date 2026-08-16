@@ -1625,6 +1625,7 @@ test('twin wrapper uses the configured default when no effort was ever seen', as
     listModels: async (p) => [{ provider: p, id: 'm', name: 'M', inputModalities: ['text'] }],
     resolveModel: async (p, m) => ({
       provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+      reasoning: { efforts: ['off', 'high', 'max'] },
     }),
     stream: async function* () {
       yield { type: 'finish', reason: { kind: 'stop' } }
@@ -1642,6 +1643,49 @@ test('twin wrapper uses the configured default when no effort was ever seen', as
     /* drain */
   }
   assert.equal(calls[0].reasoningEffort, 'high')
+})
+
+test('unsupported configured effort is ignored: metadata stays untouched and no injection', async () => {
+  const { ctx, adapters } = mockHarnessCtx({
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [], reasoningEffort: 'medium' }] },
+  })
+  const source = {
+    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
+    providerRetryPolicy: () => 'retry',
+    listModels: async (p) => [
+      {
+        provider: p, id: 'm', name: 'M', inputModalities: ['text'],
+        reasoning: { efforts: ['off', 'high', 'max'] },
+      },
+    ],
+    resolveModel: async (p, m) => ({
+      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
+      reasoning: { efforts: ['off', 'high', 'max'] },
+    }),
+    stream: async function* () {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  ctx.llm.registerAdapter(['opencode-go'], source)
+  apply(ctx, Config({}))
+  const twin = adapters.get('opencode-go-vision')
+  // Metadata: 'medium' is not advertised by the route, so the twin must not
+  // force it into the efforts list or set it as default — the host falls
+  // back to the source's own metadata.
+  const listed = await twin.listModels('opencode-go-vision')
+  assert.deepEqual(listed[0].reasoning, { efforts: ['off', 'high', 'max'] })
+  const resolved = await twin.resolveModel('opencode-go-vision', 'm')
+  assert.equal(resolved.reasoning.defaultEffort, undefined)
+  // Wrapper fallback: an unsupported configured effort is never injected.
+  const calls = []
+  ctx.llm.stream = async function* (options) {
+    calls.push({ ...options })
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages: [] })) {
+    /* drain */
+  }
+  assert.equal(calls[0].reasoningEffort, undefined)
 })
 
 test('twin wrapper leaves the effort untouched when nothing was seen or configured', async () => {

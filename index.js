@@ -1965,8 +1965,11 @@ export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, pr
   // one, so every step keeps reasoning. The vision chain never flows through
   // this body and keeps its own reasoningEffort: undefined.
   const lastReasoningEffort = new Map() // delegate provider -> last explicit effort
-  const fallbackReasoningEffort = () =>
-    typeof defaultReasoningEffort === 'function' ? defaultReasoningEffort() : defaultReasoningEffort
+  const fallbackReasoningEffort = async (options) => {
+    if (defaultReasoningEffort === undefined) return ''
+    const raw = typeof defaultReasoningEffort === 'function' ? await defaultReasoningEffort(options) : defaultReasoningEffort
+    return typeof raw === 'string' && raw !== '' ? raw : ''
+  }
   return {
     async *stream(options) {
       const messages = options.messages ?? []
@@ -2030,7 +2033,7 @@ export function createWrapperStreamBody(ctx, { imageMemory, delegateProvider, pr
         effort = lastReasoningEffort.get(delegateProvider)
       }
       if (effort === undefined) {
-        const fallback = fallbackReasoningEffort()
+        const fallback = await fallbackReasoningEffort(options)
         if (typeof fallback === 'string' && fallback !== '') effort = fallback
       }
       yield* ctx.llm.stream({
@@ -2860,13 +2863,12 @@ export function apply(ctx, config = {}) {
       if (configured === '') return model
       const reasoning = model && typeof model === 'object' ? model.reasoning : undefined
       const efforts = reasoning && Array.isArray(reasoning.efforts) ? reasoning.efforts : []
-      if (efforts.length === 0) {
-        return { ...model, reasoning: { efforts: [configured], defaultEffort: configured } }
+      if (!efforts.includes(configured)) {
+        // Not supported by the source route: never advertise or inject it.
+        // The host falls back to the source's own metadata and behavior.
+        return model
       }
-      if (efforts.includes(configured)) {
-        return { ...model, reasoning: { ...reasoning, defaultEffort: configured } }
-      }
-      return { ...model, reasoning: { ...reasoning, efforts: [configured, ...efforts], defaultEffort: configured } }
+      return { ...model, reasoning: { ...reasoning, defaultEffort: configured } }
     }
     return {
       providerInfo() {
@@ -2919,8 +2921,25 @@ export function apply(ctx, config = {}) {
         // precision tools instead of forcing an image -> text detour.
         preserveImageInput: (options) => sourceAcceptsImages(options.model),
         // issue #103 (defense in depth): even when the agent drops the effort
-        // between steps, re-inject the configured default for this twin.
-        defaultReasoningEffort: () => configuredReasoningEffort(),
+        // between steps, re-inject the configured default for this twin — but
+        // only when the source route actually advertises that effort, so an
+        // unsupported level is ignored instead of being forced upstream.
+        defaultReasoningEffort: async (options) => {
+          const configured = configuredReasoningEffort()
+          if (configured === '') return ''
+          const original = originalAdapter()
+          try {
+            const info =
+              original && typeof original.resolveModel === 'function'
+                ? await original.resolveModel(provider, options && options.model)
+                : undefined
+            const efforts =
+              info && info.reasoning && Array.isArray(info.reasoning.efforts) ? info.reasoning.efforts : []
+            return efforts.includes(configured) ? configured : ''
+          } catch {
+            return ''
+          }
+        },
       }),
     }
   }
