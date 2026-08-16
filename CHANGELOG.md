@@ -3,6 +3,13 @@
 每个版本的中英双语发布说明（GitHub Release 工作流从这里取对应版本的段落，发布前必须先写好本节）｜
 Bilingual (Chinese + English) release notes for every version — the GitHub Release workflow pulls the matching section from this file, so it must be filled in before tagging.
 
+## v1.4.4
+
+### 修复 / Fixed
+
+- **DSH rc.6 插件配置页空白**：补齐浏览器端插件对 `connection` / `remote` 的运行时依赖声明，并在 package manifest 中显式注入 `@deepseek-ai/dsh-client-connection` 与 `@deepseek-ai/dsh-api-remotes`。`settingsScope.bind()` 现在能从调用方上下文取得设置 transport 与更新事件，配置卡可正常注册；无需手动修改 `settings.yaml`。对应 client / manifest 回归断言同步更新。
+- **Blank plugin settings on DSH rc.6**: declare the browser plugin's runtime `connection` / `remote` service dependencies and explicitly inject `@deepseek-ai/dsh-client-connection` plus `@deepseek-ai/dsh-api-remotes` in the package manifest. `settingsScope.bind()` can now resolve its settings transport and invalidation events from the caller context, so the configuration card registers normally without manual `settings.yaml` edits. Client and manifest regression assertions were updated alongside the fix.
+
 ## v1.4.3
 
 ### 新增 / Added
