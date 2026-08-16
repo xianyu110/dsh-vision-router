@@ -40,6 +40,7 @@
 
 - [为什么做这个](#为什么做这个)
 - [对比同类插件](#对比同类插件)
+- [致谢](#致谢)
 - [快速开始](#快速开始)
 - [亮点](#亮点)
 - [工作原理](#工作原理)
@@ -61,20 +62,39 @@
 
 ## 对比同类插件
 
-最接近的同类是 [@anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit)（Anionex），它是知名 `agent-vision-toolkit` 系列的 DSH 原生版。两者都提供 `vision-tools` 技能和一组像素级工具，区别在理念：**零配置粘贴即用** vs **Agent 主导的视觉工程**：
+**一句话讲清区别**：其他 dsh 视觉插件大多"把图片转成文字描述再喂给 DeepSeek"（描述桥，有信息损耗）；
+本插件主打"**图片轮直接交给视觉模型看原图**"（路由桥，像素保真），同时内置免 Key 免费模型兜底。
 
-| | dsh-vision-router | @anionex/dsh-vision-toolkit |
+| | 手动切换模型 | MCP 视觉桥 | 本插件 |
+|---|---|---|---|
+| 像素保真 | ✅ 完整（切换后） | ❌ 只有文字描述 | ✅ 完整，图片轮内 |
+| 自动化 | ❌ | ✅ | ✅ |
+| 日常模型不受影响 | ❌（整会话被换） | ✅ | ✅ |
+| 供应商失败恢复 | ❌ | ❌ | ✅ 降级链 |
+| 可复用的结构化查询 | — | 部分 | ✅ JSON 模式 + 缓存 |
+| 免费开箱即用 | ❌ | ❌ | ✅ 内置免 Key 免费端点 |
+| 贴合 dsh 组合体系 | — | 外部服务器 | ✅ 一行插件行 |
+
+**与现有 dsh 社区方案的差异**（均为优秀项目，各有侧重）：
+
+| 项目 | 思路 | 本插件的差异 |
 |---|---|---|
-| 开箱图片问答 | ✅ 内置免费视觉链（OVHcloud 匿名端点），免注册免 Key | 远程工具需自备视觉 API Key（本地像素工具免 Key） |
-| 运行时 | ✅ 纯 Node，无需 Python | 需要 Python 3.11+ 受管运行时 |
-| 图片怎么进来 | ✅ 选一次「+ 自动识图」模型组后直接粘贴 | 工作区路径 + `/vision-tools` 命令，再显式调用工具 |
-| 轮次路由 | ✅ 图片轮切视觉、文本轮切回 DeepSeek——可选隐身接管，模型选择器与官方一致 | 工具驱动，无整轮自动路由 |
-| 支持 profile | Web | Web + Headless |
-| 玩法库 | 像素循环：定位 → 裁剪 → 对比 → 修复 → 再截图 | 更丰富的案例库（长截图 OCR、UI 还原、GUI 自动化） |
-| 测试 | 144 | 162 |
-| 安装 | 一条命令 | 一条命令（npm） |
+| [dsh-vision-sidecar](https://github.com/121103qwq/dsh-vision-sidecar) | 图片先经外部 VLM 做 OCR/描述，描述作为会话消息交给 DeepSeek；默认 OVHcloud 匿名端点 | 描述桥方案；本插件提供"原图直看"路由，描述能力由 `vision_describe` 按需替代 |
+| [dsh-vision-proxy](https://github.com/Flyvhidbwo/dsh-vision-proxy) | 包装 provider 路由，请求流里把图片转译成文本再交给 DeepSeek | 转译桥方案；本插件不包装 provider，通过 `agent/request` 瀑布改写路由 |
+| [dsh-vision-provider](https://github.com/libinyam/dsh-vision-provider) | 纯配置 bundle，注册一个 OpenAI 兼容多模态路由 | 配置层思路相同；本插件在此基础上增加自动路由、降级链与工具 |
+| [modlens](https://github.com/liustack/modlens) | 最早的 dsh 视觉插件；复用本机 Codex/OpenCode/Pi 等登录态作为视觉引擎 | 引擎复用思路；本插件自带供应商链，不依赖本机其他 CLI |
+| [dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) | 10 个意图化视觉工具（Q&A/OCR/像素校验/UI 还原） | 工具集更全；本插件聚焦"路由 + 一个通用对比工具"，更轻 |
+| [dsh-tool-vision](https://github.com/Scorp1o117/dsh-tool-vision) | `inspect_image` 工具 + `llm/stream` 瀑布图片桥 | 瀑布桥思路相近；本插件多出轮次路由、降级链、缓存与免费端点 |
 
-两者都是 MIT 许可、一条命令安装。想要图片**粘贴即用**、零配置就选本插件；需要 Headless 部署或更丰富的案例库，可以看 @anionex/dsh-vision-toolkit。（功能对比以其 README 2026-08 状态为准。）
+## 致谢
+
+本插件借鉴了以上全部社区项目的思路，特别是 [dsh-vision-sidecar](https://github.com/121103qwq/dsh-vision-sidecar)
+的"免注册免费端点"发现（OVHcloud AI Endpoints 匿名层）。感谢
+[dsh-vision-proxy](https://github.com/Flyvhidbwo/dsh-vision-proxy)、
+[dsh-vision-provider](https://github.com/libinyam/dsh-vision-provider)、
+[modlens](https://github.com/liustack/modlens)、
+[dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit)、
+[dsh-tool-vision](https://github.com/Scorp1o117/dsh-tool-vision) 作者们的探索。
 
 ## 快速开始
 
