@@ -303,6 +303,7 @@ Web 配置页在 **设置 → 插件 → 插件配置** 下注册「视觉路由
 | `timeoutMs` | `120000` | 单次视觉调用超时 |
 | `artifactsDir` | `.dsh-vision-router/artifacts` | 产物目录（相对会话工作区） |
 | `proxy` / `proxyHosts` | `''` / openrouter 域名 | 仅视觉供应商域名可选的本地代理 |
+| `catalogCorrections` | `true` | 内置目录纠错：当已安装的 pi-ai 目录把已知模型路由到错误协议时（例如 `opencode-go/qwen3.6-plus` 被指向 OpenAI chat completions，而 OpenCode Go 只在 `/v1/messages` 上提供该模型），插件直接按正确协议应答该后端；上游目录修复后每条纠错自动失效 |
 
 ## 环境要求
 

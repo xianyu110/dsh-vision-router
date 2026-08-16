@@ -305,6 +305,7 @@ Everything is optional; defaults work out of the box. Edit via the Web card or a
 | `timeoutMs` | `120000` | per vision call deadline |
 | `artifactsDir` | `.dsh-vision-router/artifacts` | artifact directory (relative to the session workspace) |
 | `proxy` / `proxyHosts` | `''` / openrouter hosts | optional proxy for vision provider hosts only |
+| `catalogCorrections` | `true` | built-in catalog-routing corrections: when the installed pi-ai catalog routes a known model to the wrong wire protocol (e.g. `opencode-go/qwen3.6-plus` to OpenAI chat completions while OpenCode Go only serves it on `/v1/messages`), the plugin answers that backend directly over the corrected protocol. Each correction disarms itself once the catalog is fixed upstream |
 
 ## Requirements
 

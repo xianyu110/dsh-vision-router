@@ -31,6 +31,11 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { appendPromptToImageOnlyMessage, fetchWithOpenAICompatibility } from './lib/http-compat.js'
+import {
+  routingCorrectionFor,
+  toAnthropicMessages,
+  callAnthropicCompatible,
+} from './lib/catalog-corrections.js'
 import { createCachedUpdateChecker } from './lib/update-check.js'
 import { detectDshSelfUpdatePlan, runDshPluginUpdate } from './lib/self-update.js'
 import {
@@ -254,6 +259,13 @@ export const Config = z.object({
   // id (or "provider/model") per entry. Only consulted for vision BACKEND
   // capability (the session-side admission stays host-owned).
   extraVisionModels: z.array(z.string()).default([]),
+  // Built-in catalog-routing corrections (see lib/catalog-corrections.js):
+  // when the installed pi-ai catalog routes a known provider/model to the
+  // wrong wire protocol (e.g. opencode-go/qwen3.6-plus to openai-completions
+  // while the gateway only serves it on /v1/messages), the plugin dispatches
+  // that pair directly over the corrected protocol instead of the harness
+  // adapter. Each correction disarms itself once the catalog entry matches.
+  catalogCorrections: z.boolean().default(true),
   // Client-persisted UI state (issue #78): DSH Desktop serves the Web UI from
   // a random port on every launch, so origin-scoped localStorage forgets the
   // first-run onboarding dialog and it re-appeared on every boot. These keys
@@ -3023,6 +3035,27 @@ export function apply(ctx, config = {}) {
       return undefined
     }
   }
+  // Wire facts of one resolved catalog entry — the fingerprint a routing
+  // correction is checked against ({ api, baseUrl }). Undefined when the
+  // provider is not owned by the pi-ai adapter or the entry cannot be read:
+  // corrections fail closed and the normal harness path keeps the call.
+  const resolvedCatalogFactsOf = (provider, model) => {
+    try {
+      const profile = resolvedPiAiProfileOf(provider)
+      const getModels = profile && profile.piProvider && profile.piProvider.getModels
+      if (typeof getModels !== 'function') return undefined
+      const models = getModels.call(profile.piProvider)
+      if (!Array.isArray(models)) return undefined
+      const entry = models.find((candidate) => candidate && String(candidate.id) === String(model))
+      if (!entry) return undefined
+      return {
+        api: typeof entry.api === 'string' ? entry.api : undefined,
+        baseUrl: typeof entry.baseUrl === 'string' ? entry.baseUrl : '',
+      }
+    } catch {
+      return undefined
+    }
+  }
   const channelBridgePlan = (provider, model) => {
     const rawProfile = rawChannelProfileOf(provider)
     const resolvedProfile = resolvedPiAiProfileOf(provider)
@@ -3100,6 +3133,99 @@ export function apply(ctx, config = {}) {
       [{ role: 'user', content: [...content, { type: 'text', text: instruction }] }],
       { maxTokens: 4096, signal, resolveCredential: () => apiKey },
     )
+  }
+
+  // ── catalog routing corrections (lib/catalog-corrections.js) ─────────────
+  //
+  // Known provider/model pairs whose installed pi-ai catalog routes them to
+  // the wrong wire protocol (opencode-go/qwen3.6-plus → openai-completions,
+  // while the gateway only serves it on /v1/messages). While the resolved
+  // catalog still shows the broken facts, the pair is dispatched directly
+  // over the corrected protocol; the moment upstream fixes the catalog (or
+  // the user points the route at their own gateway) the correction disarms
+  // itself and the pair returns to the harness path.
+  const routingCorrectionForPair = async (pair) => {
+    if (!pair || current().catalogCorrections === false) return undefined
+    const correction = routingCorrectionFor(
+      resolvedCatalogFactsOf(pair.provider, pair.model),
+      pair.provider,
+      pair.model,
+    )
+    if (correction === undefined) return undefined
+    const rawProfile = rawChannelProfileOf(pair.provider)
+    const resolvedProfile = resolvedPiAiProfileOf(pair.provider)
+    const apiKeyEnv = [rawProfile, resolvedProfile]
+      .map((profile) => (profile && typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : ''))
+      .find((ref) => ref !== '')
+    return {
+      ...correction,
+      plan: {
+        rawProfile,
+        resolvedProfile,
+        transport: {
+          baseURL: correction.baseURL,
+          api: correction.api,
+          ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }),
+        },
+      },
+    }
+  }
+
+  /**
+   * One vision-model answer through a corrected route, or undefined when the
+   * pair has no active correction (callers then use the harness path). The
+   * credential is resolved exactly like the harness adapter would resolve it:
+   * the route's apiKeyEnv first, then the catalog provider's native auth
+   * (process.env.OPENCODE_API_KEY for opencode-go).
+   */
+  const correctedVisionAnswer = async (pair, messages, options = {}) => {
+    const correction = await routingCorrectionForPair(pair)
+    if (correction === undefined) return undefined
+    const apiKey = await resolveChannelApiKey(correction.plan)
+    if (apiKey === undefined || apiKey === '') {
+      throw new Error(
+        `corrected route "${pair.provider}/${pair.model}": channel credential could not be resolved`,
+      )
+    }
+    const attachments = ctx.get('attachments')
+    if (attachments === undefined) {
+      throw new Error('corrected route: the attachment service is not registered')
+    }
+    const bytesOf = async (attachment) => {
+      const stored = await attachments.readImage(attachment)
+      let bytes = stored.data
+      if (downscaleEnabled() && bytes && bytes.length > 0) {
+        bytes = await downscaleImage(bytes, downscaleMaxPixels())
+      }
+      return bytes
+    }
+    const anthropic = await toAnthropicMessages(messages, bytesOf)
+    if (anthropic.messages.length === 0) {
+      throw new Error(`corrected route "${pair.provider}/${pair.model}": no representable content to send`)
+    }
+    return callAnthropicCompatible(
+      { name: pair.provider, baseURL: correction.baseURL, model: pair.model, apiKeyEnv: '' },
+      anthropic.messages,
+      {
+        system: anthropic.system,
+        maxTokens: options.maxTokens ?? 4096,
+        signal: options.signal,
+        apiKey,
+      },
+    )
+  }
+
+  /** Shared single-answer dispatch: corrected route first, harness path otherwise. */
+  const callVisionPair = async (pair, messages, options = {}) => {
+    const corrected = await correctedVisionAnswer(pair, messages, options)
+    if (corrected !== undefined) return corrected
+    return visionAnswer(ctx.llm, {
+      provider: pair.provider,
+      model: pair.model,
+      messages,
+      maxTokens: options.maxTokens ?? 4096,
+      signal: options.signal,
+    })
   }
 
   const collectVisionBackendCapabilities = async () => {
@@ -3296,14 +3422,35 @@ export function apply(ctx, config = {}) {
           let failed = false
           let failMessage = 'unknown error'
           try {
-            for await (const chunk of ctx.llm.stream({
-              ...options,
-              provider: pair.provider,
-              model: pair.model,
-              reasoningEffort: undefined,
-              messages,
-              signal: combineSignals(options.signal, deadline.signal(), AbortSignal.timeout(timeoutMs())),
-            })) {
+            const streamPair = async function* () {
+              // Catalog routing corrections: pairs whose installed catalog
+              // points at the wrong wire protocol are answered directly over
+              // the corrected endpoint instead of the harness adapter.
+              const text = await correctedVisionAnswer(pair, messages, {
+                maxTokens: options.maxTokens ?? 65536,
+                signal: combineSignals(options.signal, deadline.signal(), AbortSignal.timeout(timeoutMs())),
+              })
+              if (text === undefined) {
+                yield* ctx.llm.stream({
+                  ...options,
+                  provider: pair.provider,
+                  model: pair.model,
+                  reasoningEffort: undefined,
+                  messages,
+                  signal: combineSignals(options.signal, deadline.signal(), AbortSignal.timeout(timeoutMs())),
+                })
+                return
+              }
+              if (text !== '') {
+                // Same chunk protocol as the vision-http route: a bare
+                // text-delta without block frames is dropped by assemblers.
+                yield { type: 'block-start', index: 0, blockType: 'text' }
+                yield { type: 'text-delta', index: 0, text }
+                yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+              }
+              yield { type: 'finish', reason: { kind: 'stop' } }
+            }
+            for await (const chunk of streamPair()) {
               if (chunk && chunk.type === 'finish') {
                 const kind = chunk.reason && chunk.reason.kind
                 if (kind === 'error' || kind === 'aborted') {
@@ -4097,13 +4244,7 @@ export function apply(ctx, config = {}) {
           try {
             let messages = baseMessages
             const signal = combineSignals(deadline.signal(), AbortSignal.timeout(timeoutMs()))
-            let text = await visionAnswer(ctx.llm, {
-              provider: pair.provider,
-              model: pair.model,
-              messages,
-              maxTokens: 4096,
-              signal,
-            })
+            let text = await callVisionPair(pair, messages, { maxTokens: 4096, signal })
             if (wantJson) {
               for (let attempt = 0; attempt < 2; attempt++) {
                 const parsed = extractJson(text)
@@ -4126,13 +4267,7 @@ export function apply(ctx, config = {}) {
                       source: { kind: 'plugin', plugin: 'dsh-vision-router' },
                     },
                   ]
-                  text = await visionAnswer(ctx.llm, {
-                    provider: pair.provider,
-                    model: pair.model,
-                    messages,
-                    maxTokens: 4096,
-                    signal,
-                  })
+                  text = await callVisionPair(pair, messages, { maxTokens: 4096, signal })
                 }
               }
               const fallback = `vision_describe: the model did not produce valid JSON. Raw output:\n${text.slice(0, 2000)}`
@@ -4460,15 +4595,14 @@ export function apply(ctx, config = {}) {
           pairCapabilities.set(pairKey, pairCapability)
         }
         try {
-          const text = await visionAnswer(ctx.llm, {
-            provider: pair.provider,
-            model: pair.model,
-            messages: [
-              { role: 'user', content: [block, { type: 'text', text: instruction }] },
-            ],
-            maxTokens: 4096,
-            signal: combineSignals(deadline.signal(), AbortSignal.timeout(timeoutMs())),
-          })
+          const text = await callVisionPair(
+            pair,
+            [{ role: 'user', content: [block, { type: 'text', text: instruction }] }],
+            {
+              maxTokens: 4096,
+              signal: combineSignals(deadline.signal(), AbortSignal.timeout(timeoutMs())),
+            },
+          )
           if (text && text.trim() !== '') return { ok: true, text: text.trim() }
         } catch (error) {
           const classification = classifyVisionFailure(error)
