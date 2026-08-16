@@ -1242,9 +1242,7 @@ test('stealth defaults to false (issue #34: explicit opt-in, no stealth takeover
 test('wrappedProviders pre-fills the stock deepseek-official row out of the box', () => {
   // like the vision chain pre-fills vision-http, the wrappers section ships
   // one visible default row so users see the built-in wrapper at first glance
-  assert.deepEqual(Config({}).wrappedProviders, [
-    { provider: 'deepseek-official', models: [], reasoningEffort: '' },
-  ])
+  assert.deepEqual(Config({}).wrappedProviders, [{ provider: 'deepseek-official', models: [] }])
 })
 
 
@@ -1532,42 +1530,7 @@ test('apply registers an image-capable twin route for wrappedProviders', async (
   assert.ok(delegateCall.messages[0].content[0].text.includes('img-1'))
 })
 
-test('wrappedProviders reasoningEffort gives the twin a reasoning defaultEffort (issue #103)', async () => {
-  const { ctx, adapters } = mockHarnessCtx({
-    config0: {
-      wrappedProviders: [{ provider: 'opencode-go', models: ['deepseek-v4-flash'], reasoningEffort: 'max' }],
-    },
-  })
-  // pi-ai routes advertise efforts without a default when the provider
-  // profile does not set `reasoning` — the exact #103 trigger.
-  const piAiLike = {
-    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
-    providerRetryPolicy: () => 'retry',
-    listModels: async (p) => [
-      {
-        provider: p, id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', inputModalities: ['text'],
-        reasoning: { efforts: ['off', 'high', 'max'] },
-      },
-    ],
-    resolveModel: async (p, m) => ({
-      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
-      reasoning: { efforts: ['off', 'high', 'max'] },
-    }),
-    stream: async function* () {
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    },
-  }
-  ctx.llm.registerAdapter(['opencode-go'], piAiLike)
-  apply(ctx, Config({}))
-  const twin = adapters.get('opencode-go-vision')
-  const listed = await twin.listModels('opencode-go-vision')
-  assert.deepEqual(listed[0].reasoning, { efforts: ['off', 'high', 'max'], defaultEffort: 'max' })
-  const resolved = await twin.resolveModel('opencode-go-vision', 'deepseek-v4-flash')
-  assert.equal(resolved.reasoning.defaultEffort, 'max')
-  assert.deepEqual(resolved.reasoning.efforts, ['off', 'high', 'max'])
-})
-
-test('twin inherits the source defaultEffort when no reasoningEffort override is set', async () => {
+test('twin mirrors the source reasoning metadata one-to-one (defaultEffort inheritance)', async () => {
   const { ctx, adapters } = mockHarnessCtx({
     config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
   })
@@ -1639,79 +1602,6 @@ test('twin wrapper re-injects the last explicit reasoningEffort on later steps (
   assert.equal(calls[1].reasoningEffort, 'max')
   assert.equal(calls[2].reasoningEffort, 'off')
   assert.equal(calls[3].reasoningEffort, 'off')
-})
-
-test('twin wrapper uses the configured default when no effort was ever seen', async () => {
-  const { ctx, adapters } = mockHarnessCtx({
-    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [], reasoningEffort: 'high' }] },
-  })
-  const source = {
-    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
-    providerRetryPolicy: () => 'retry',
-    listModels: async (p) => [{ provider: p, id: 'm', name: 'M', inputModalities: ['text'] }],
-    resolveModel: async (p, m) => ({
-      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
-      reasoning: { efforts: ['off', 'high', 'max'] },
-    }),
-    stream: async function* () {
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    },
-  }
-  ctx.llm.registerAdapter(['opencode-go'], source)
-  apply(ctx, Config({}))
-  const twin = adapters.get('opencode-go-vision')
-  const calls = []
-  ctx.llm.stream = async function* (options) {
-    calls.push({ ...options })
-    yield { type: 'finish', reason: { kind: 'stop' } }
-  }
-  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages: [] })) {
-    /* drain */
-  }
-  assert.equal(calls[0].reasoningEffort, 'high')
-})
-
-test('unsupported configured effort is ignored: metadata stays untouched and no injection', async () => {
-  const { ctx, adapters } = mockHarnessCtx({
-    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [], reasoningEffort: 'medium' }] },
-  })
-  const source = {
-    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
-    providerRetryPolicy: () => 'retry',
-    listModels: async (p) => [
-      {
-        provider: p, id: 'm', name: 'M', inputModalities: ['text'],
-        reasoning: { efforts: ['off', 'high', 'max'] },
-      },
-    ],
-    resolveModel: async (p, m) => ({
-      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
-      reasoning: { efforts: ['off', 'high', 'max'] },
-    }),
-    stream: async function* () {
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    },
-  }
-  ctx.llm.registerAdapter(['opencode-go'], source)
-  apply(ctx, Config({}))
-  const twin = adapters.get('opencode-go-vision')
-  // Metadata: 'medium' is not advertised by the route, so the twin must not
-  // force it into the efforts list or set it as default — the host falls
-  // back to the source's own metadata.
-  const listed = await twin.listModels('opencode-go-vision')
-  assert.deepEqual(listed[0].reasoning, { efforts: ['off', 'high', 'max'] })
-  const resolved = await twin.resolveModel('opencode-go-vision', 'm')
-  assert.equal(resolved.reasoning.defaultEffort, undefined)
-  // Wrapper fallback: an unsupported configured effort is never injected.
-  const calls = []
-  ctx.llm.stream = async function* (options) {
-    calls.push({ ...options })
-    yield { type: 'finish', reason: { kind: 'stop' } }
-  }
-  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages: [] })) {
-    /* drain */
-  }
-  assert.equal(calls[0].reasoningEffort, undefined)
 })
 
 test('twin wrapper leaves the effort untouched when nothing was seen or configured', async () => {
@@ -2651,10 +2541,10 @@ test('channel bridge transport uses resolved pi-ai catalog model facts', () => {
 // run a STRICT upstream that throws on anything it cannot actually handle,
 // proving nothing fabricated is ever forwarded unsafely.
 
-test('strict upstream: twin forwards only supported reasoning efforts', async () => {
+test('strict upstream: twin forwards only what the picker explicitly sent', async () => {
   const supported = new Set(['off', 'high', 'max'])
   const { ctx, adapters } = mockHarnessCtx({
-    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [], reasoningEffort: 'max' }] },
+    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [] }] },
   })
   const strict = {
     providerInfo: (p) => ({ id: p, name: 'Opencode' }),
@@ -2683,45 +2573,11 @@ test('strict upstream: twin forwards only supported reasoning efforts', async ()
       /* drain */
     }
   }
-  // configured default, explicit selection, and the remembered re-injection
-  // must all resolve to the supported 'max'
-  await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
+  // the user picked 'max' in the bottom-right selector: the first step
+  // carries it, and the wrapper remembers it for the steps that follow
   await drain({ provider: 'opencode-go-vision', model: 'm', messages: [], reasoningEffort: 'max' })
   await drain({ provider: 'opencode-go-vision', model: 'm', messages: [] })
-  assert.deepEqual(seen, ['max', 'max', 'max'])
-})
-
-test('strict upstream: an unsupported configured effort is never forwarded', async () => {
-  const supported = new Set(['off', 'high', 'max'])
-  const { ctx, adapters } = mockHarnessCtx({
-    config0: { wrappedProviders: [{ provider: 'opencode-go', models: [], reasoningEffort: 'medium' }] },
-  })
-  const strict = {
-    providerInfo: (p) => ({ id: p, name: 'Opencode' }),
-    providerRetryPolicy: () => 'retry',
-    listModels: async (p) => [
-      { provider: p, id: 'm', name: 'M', inputModalities: ['text'], reasoning: { efforts: [...supported] } },
-    ],
-    resolveModel: async (p, m) => ({
-      provider: p, id: m, name: m, inputModalities: ['text'], context: { contextWindow: 100000 },
-      reasoning: { efforts: [...supported] },
-    }),
-  }
-  ctx.llm.registerAdapter(['opencode-go'], strict)
-  apply(ctx, Config({}))
-  const twin = adapters.get('opencode-go-vision')
-  const seen = []
-  ctx.llm.stream = async function* (options) {
-    if (options.reasoningEffort !== undefined && !supported.has(options.reasoningEffort)) {
-      throw new Error(`strict upstream rejects reasoningEffort "${options.reasoningEffort}"`)
-    }
-    seen.push(options.reasoningEffort)
-    yield { type: 'finish', reason: { kind: 'stop' } }
-  }
-  for await (const _c of twin.stream({ provider: 'opencode-go-vision', model: 'm', messages: [] })) {
-    /* drain */
-  }
-  assert.deepEqual(seen, [undefined])
+  assert.deepEqual(seen, ['max', 'max'])
 })
 
 test('strict upstream: twin never leaks image blocks to a text-only source', async () => {

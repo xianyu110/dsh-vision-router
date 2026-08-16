@@ -528,29 +528,17 @@ test('auto-discovered inferred vision models retain bridge capability state', ()
   assert.equal(source.includes("transport.api !== 'openai-completions'"), true)
 })
 
-test('wrappedProviders reasoningEffort: server schema, client syntax and editor (issue #103)', () => {
-  const clientSource = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+test('the twin preserves the picker-chosen reasoningEffort across steps (issue #103)', () => {
   const serverSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
-  // Server: the per-entry schema field feeds the twin's defaultEffort and the
-  // wrapper body's re-injection fallback.
-  assert.equal(serverSource.includes("reasoningEffort: z.string().default('')"), true)
-  assert.equal(serverSource.includes('const configuredReasoningEffort = () => {'), true)
-  assert.equal(serverSource.includes('defaultReasoningEffort: async (options) => {'), true)
+  // The reasoning level belongs to the chat page's bottom-right picker: the
+  // plugin never configures or invents one. The wrapper body only remembers
+  // the last explicitly seen effort per delegate and re-injects it on the
+  // later steps that arrive without one, so the user's choice survives the
+  // twin switch. The vision chain keeps reasoningEffort: undefined.
+  assert.equal(serverSource.includes('const lastReasoningEffort = new Map()'), true)
   assert.equal(serverSource.includes('lastReasoningEffort.set(delegateProvider, effort)'), true)
-  // Unsupported levels are never forced: metadata and re-injection both check
-  // the source route's advertised efforts first.
-  assert.equal(serverSource.includes('if (!efforts.includes(configured)) {'), true)
-  assert.equal(serverSource.includes('return efforts.includes(configured) ? configured : \'\''), true)
-  // Client: the editor row carries the effort and folds it back per provider;
-  // the free-text shape accepts a trailing ` @ effort`.
-  assert.equal(clientSource.includes("wrapEffortDefault: '默认等级'"), true)
-  assert.equal(clientSource.includes("wrapEffortTitle: '该包装组缺少 reasoning.defaultEffort 时使用的推理等级（源路由不支持的等级自动忽略）'"), true)
-  assert.equal(clientSource.includes("wrapEffortDefault: 'Default effort'"), true)
-  assert.equal(clientSource.includes("const at = line.lastIndexOf(' @ ')"), true)
-  assert.equal(clientSource.includes("reasoningEffort: entry.effort"), true)
-  assert.equal(clientSource.includes("['off', 'low', 'medium', 'high', 'max'].map((effort) => h('option'"), true)
-  assert.equal(clientSource.includes('.vr-select-effort{flex:0 0 auto;width:104px}'), true)
-  // Copy documents the fix for both dictionaries.
-  assert.equal(clientSource.includes('不支持的等级自动忽略'), true)
-  assert.equal(clientSource.includes('append ` @ max` to set the group’s reasoning default'), true)
+  assert.equal(serverSource.includes('{ ...options, reasoningEffort: effort }'), true)
+  assert.equal(serverSource.includes('reasoningEffort: undefined'), true)
+  assert.equal(serverSource.includes('reasoningEffort: z.string()'), false)
+  assert.equal(serverSource.includes('wrappedProviders[].reasoningEffort'), false)
 })
