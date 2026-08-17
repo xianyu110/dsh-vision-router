@@ -3,6 +3,37 @@
 每个版本的中英双语发布说明（GitHub Release 工作流从这里取对应版本的段落，发布前必须先写好本节）｜
 Bilingual (Chinese + English) release notes for every version — the GitHub Release workflow pulls the matching section from this file, so it must be filled in before tagging.
 
+## v1.4.5
+
+### 新增 / Added
+
+- **可选的结构化预识别 1+x（实验，#136）**：新增 `structuredVisionBootstrap`（默认关闭）。开启后，每个图片任务先做 1 次**不读取具体任务目标**的通用结构化视觉基线，再要求聊天模型围绕原问题至少追加 1 次证据/深挖视觉工具调用后才能回答（`x >= 1`）；基线稳定返回 `visual_kind`、`regions`、`visible_text`、`entities`、`relationships`、`uncertainties` 与 `recommended_followups` 等信息。结构化流程确实需要 OCR 时，自动模式优先使用视觉模型，降低中文/UI 截图上本地 OCR 噪声；普通识图工具和默认 tools-first 流程不受影响。
+- **Optional structured vision pre-scan 1+x (experimental, #136)**: add `structuredVisionBootstrap` (off by default). Each image task first gets one **task-independent** structured visual baseline, then the chat model must make at least one task-directed evidence/deepening vision-tool call before it may answer (`x >= 1`). The baseline exposes stable fields such as `visual_kind`, `regions`, `visible_text`, `entities`, `relationships`, `uncertainties`, and `recommended_followups`. When the structured flow actually needs OCR, auto mode prefers vision-model OCR to reduce noisy local OCR on Chinese/UI screenshots. The normal vision tools and default tools-first flow are unchanged.
+
+### 改进 / Changed
+
+- **设置页按用户任务重新组织（#139）**：保留 Quick Start 与三步首次引导，但把工程实现词汇换成用户可理解的结果描述——「视觉后端链」统一为「识图模型」，第一屏聚焦「自动创建 + 自动识图模型组 / 识图工具 / 结构化预识别 1+x / 整轮交给视觉模型 / 识图模型链」；高级设置重组为**性能 / 兼容性 / 网络 / 开发者设置**，测试连接移动到识图模型附近，版本与诊断下移。整轮视觉路由仍是普通开关，现有配置 key、默认值、provider 与运行时路由语义不变。
+- **Settings are reorganized around user intent (#139)**: Quick Start and the three-step first-run guide remain, while implementation vocabulary is replaced with outcome-oriented labels — the “vision backend chain” becomes “Vision model”; the first screen focuses on Auto Vision groups, vision tools, structured 1+x pre-scan, whole-turn vision routing, and the vision-model chain. Advanced controls are grouped into **Performance / Compatibility / Network / Developer settings**, connection testing moves next to vision-model selection, and version/diagnostics move lower. Whole-turn routing remains a normal toggle; existing config keys, defaults, provider behavior, and runtime routing semantics are unchanged.
+- **未保存设置操作更轻量（#136 / #139）**：继续保留滚动时随时可用的「未保存 / 放弃修改 / 保存」能力和失败后草稿保留语义，但最终样式从横铺整个卡片的粘性横条收成右上角紧凑 sticky 操作块，去掉重毛玻璃、整行底边与大阴影，减少对内容的遮挡。
+- **Lighter unsaved-settings controls (#136 / #139)**: keep the always-reachable Unsaved / Discard / Save behavior and draft retention on failed writes, but replace the full-width sticky banner with a compact top-right sticky action group, removing the heavy blur, full-row divider, and large shadow so it interferes less with the settings content.
+
+### 修复 / Fixed
+
+- **Windows「打开日志文件夹」兼容（#112）**：`explorer.exe` 通过 shell relay 返回数字退出码时按成功交接处理；遇到真正的 spawn 级失败时再回退到 `cmd /c start`，两条路径都失败时返回可机器读取的错误码。macOS / Linux 继续严格处理原生非零退出码，并新增 Windows、macOS、Ubuntu 三端回归覆盖。
+- **Windows “Open log folder” compatibility (#112)**: numeric `explorer.exe` relay exit codes are treated as a successful shell hand-off; true spawn-level failures fall back to `cmd /c start`, and failures from both launch paths carry a machine-readable error code. macOS/Linux keep strict native non-zero handling, with regression coverage across Windows, macOS, and Ubuntu.
+
+### 文档与兼容性 / Docs & Compatibility
+
+- **dsh-web-ui / dsh-web-ui-all 共存说明**：中英文 README 新增兼容说明。上游 `dsh-tool-describe-image` 发送钩子若先把图片改写成 `describe-image` 引用，会让 Vision Router 收不到原始 image block；新版 dsh-web-ui 可关闭「发送时改写图片为 describe-image 引用」（`interceptImageSend: false`），且每次发送动态读取，无需重装 hook 或重启 DSH。
+- **dsh-web-ui / dsh-web-ui-all coexistence note**: both READMEs now explain that the upstream `dsh-tool-describe-image` send hook may rewrite an image into a `describe-image` reference before Vision Router receives the original image block. Current dsh-web-ui can disable “Rewrite images to describe-image references on send” (`interceptImageSend: false`), read dynamically on every send with no hook reinstall or DSH restart.
+- **设计来源与归因补充**：中英文 README 明确记录深度视觉工具层、UI restoration / pixel-diff 闭环、渐进式工具暴露及部分工具职责/命名受到 Anionex/agent-vision-toolkit 与 dsh-vision-toolkit 的设计影响，同时区分本项目独立实现和发展的 turn-level/tools-first routing、DSH 准入/包装、多后端 fallback、内置免费链、附件/图片记忆、缓存与运行时容错。
+- **Expanded design-lineage attribution**: both READMEs explicitly credit Anionex/agent-vision-toolkit and dsh-vision-toolkit for influence on the deep-vision tool layer, UI-restoration/pixel-diff loop, progressive tool exposure, and parts of the tool decomposition/naming, while distinguishing the independently implemented turn-level/tools-first routing, DSH admission/wrapping, multi-backend fallback, built-in free chain, attachment/image memory, caching, and runtime resilience.
+
+### 验证 / Validation
+
+- **270 项自动化测试通过**：Node 22 / Node 24 测试矩阵与 Ubuntu / macOS / Windows 宿主打包 + shared-sharp 回归均通过，覆盖本次设置、1+x 和日志目录兼容改动。
+- **270 automated tests pass**: the Node 22 / Node 24 test matrix and Ubuntu / macOS / Windows packed-host + shared-sharp regression jobs all pass, covering the settings redesign, 1+x flow, and log-folder compatibility changes.
+
 ## v1.4.4
 
 ### 修复 / Fixed
