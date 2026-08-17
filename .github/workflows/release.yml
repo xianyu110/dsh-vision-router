@@ -104,11 +104,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Node.js
+      - name: Set up Node.js for npm trusted publishing
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org/'
+          package-manager-cache: false
+
+      - name: Pin npm trusted-publishing client
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.18.0
+          echo "node=$(node --version)"
+          echo "npm=$(npm --version)"
+          node <<'NODE'
+          const node = process.versions.node.split('.').map(Number)
+          if (node[0] < 22 || (node[0] === 22 && node[1] < 14)) {
+            throw new Error(`Node ${process.versions.node} is below the npm trusted-publishing minimum 22.14.0`)
+          }
+          NODE
+          NPM_VERSION="$(npm --version)"
+          node - "$NPM_VERSION" <<'NODE'
+          const version = process.argv[2].split('.').map(Number)
+          const min = [11, 5, 1]
+          const ok = version.some((part, i) => part > min[i] && version.slice(0, i).every((v, j) => v === min[j])) || version.every((v, i) => v === min[i])
+          if (!ok) throw new Error(`npm ${process.argv[2]} is below the trusted-publishing minimum 11.5.1`)
+          NODE
 
       - name: Re-verify immutable release identity
         shell: bash
@@ -161,12 +183,10 @@ jobs:
             echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish exact tarball to npm with provenance
+      - name: Publish exact tarball to npm with trusted OIDC
         if: steps.registry.outputs.already_published == 'false'
         shell: bash
         run: npm publish "$PACKAGE_TARBALL" --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Verify npm registry tarball identity
         shell: bash
@@ -214,7 +234,7 @@ jobs:
             echo "- npm tarball SHA-1: \`$PACKAGE_SHA1\`"
             echo "- tarball SHA-256: \`$PACKAGE_SHA256\`"
             echo "- packed files: \`$PACKAGE_FILE_COUNT\`"
-            echo "- npm provenance: enabled"
+            echo "- npm provenance: enabled via trusted publishing (OIDC)"
           } >> release-notes.md
 
       - name: Create GitHub Release once
