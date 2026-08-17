@@ -60,6 +60,7 @@ import {
   structuredBootstrapMemory,
   structuredBootstrapQuestion,
 } from './lib/structured-bootstrap.js'
+import { planMixedBranches, renderMixedGuidance } from './lib/mixed-router.js'
 import { assertNoRepetitionLoop } from './lib/repetition-guard.js'
 
 // sharp is a native module with platform-specific prebuilt binaries. It used
@@ -4784,22 +4785,29 @@ export function apply(ctx, config = {}) {
       bootstrapState.failed !== true
     ) {
       if (toolEnabled()) activateDeepTools()
+      // mixed 分路识别（精度优化）：bootstrap 判出混合内容时，按分支注入
+      // 引导，避免模型漏判/错判另一半内容；非 mixed / 细分失败时无引导。
+      const mixedGuidanceText = renderMixedGuidance(bootstrapState && bootstrapState.mixedPlan)
+      const followupBase =
+        '图片的整体预识别已经完成。接下来我先围绕你的问题做至少 1 次深挖验证：' +
+        '根据 evidence / recommended_followups 选择并调用至少 1 个能新增或验证证据的视觉工具，完成前先不回答。'
+      const ocrPolicy =
+        '不要默认把 OCR 当第二步：OCR 是逐字转写，对 1/l、0/O、空格、换行存在系统性混淆，' +
+        '逐字结果往往比结合上下文的语义理解（vision_describe / vision_detect）更不可靠；' +
+        '仅当需要逐字保真且无法靠上下文恢复时才用 vision_ocr（如可执行代码、需精确引用的长文档/合同/表单、表格数字、验证码、无语义锚点的生僻字）。' +
+        '若确实调用 vision_ocr，把它当需要交叉验证的证据，而不是最终事实。' +
+        'UI/截图语义验证优先 vision_detect 或聚焦的 vision_describe；局部目标可用 vision_ground。' +
+        '结构化模式下若确实调用 vision_ocr 且未显式指定引擎，会自动使用视觉模型 OCR（engine=vision）而不是先接受本地 Tesseract 的非空结果，' +
+        '以提高中文/UI 文字准确率。完成至少 1 次后续证据调用后再进入自由 Agent 循环，可继续调用更多工具或作答。'
       bootstrapReminder = {
         role: 'user',
         id: `vision-router-structured-followup-${payload.turn}-${Date.now()}`,
         content: [
           {
             type: 'text',
-            text:
-              '图片的整体预识别已经完成。接下来我先围绕你的问题做至少 1 次深挖验证：' +
-              '根据 evidence / recommended_followups 选择并调用至少 1 个能新增或验证证据的视觉工具，完成前先不回答。' +
-              '不要默认把 OCR 当第二步：OCR 是逐字转写，对 1/l、0/O、空格、换行存在系统性混淆，' +
-              '逐字结果往往比结合上下文的语义理解（vision_describe / vision_detect）更不可靠；' +
-              '仅当需要逐字保真且无法靠上下文恢复时才用 vision_ocr（如可执行代码、需精确引用的长文档/合同/表单、表格数字、验证码、无语义锚点的生僻字）。' +
-              '若确实调用 vision_ocr，把它当需要交叉验证的证据，而不是最终事实。' +
-              'UI/截图语义验证优先 vision_detect 或聚焦的 vision_describe；局部目标可用 vision_ground。' +
-              '结构化模式下若确实调用 vision_ocr 且未显式指定引擎，会自动使用视觉模型 OCR（engine=vision）而不是先接受本地 Tesseract 的非空结果，' +
-              '以提高中文/UI 文字准确率。完成至少 1 次后续证据调用后再进入自由 Agent 循环，可继续调用更多工具或作答。',
+            text: mixedGuidanceText
+              ? `${followupBase}${mixedGuidanceText}${ocrPolicy}`
+              : `${followupBase}${ocrPolicy}`,
           },
         ],
         source: { kind: 'plugin', plugin: 'dsh-vision-router' },
@@ -5545,6 +5553,12 @@ ctx.logger?.info(
           bootstrapState.followupCompleted = false
         }
         const evidence = normalizeStructuredBootstrapResult(parsed, raw)
+        // mixed 分路识别：bootstrap 判出 visual_kind=mixed 时，立即规划分支
+        // （精度优化——避免模型漏判/错判另一半内容；≤2 分支成本封顶）。
+        // 结果存进 turn 状态，供下一次 pre-step 的 followupReminder 注入引导。
+        if (bootstrapState && evidence.visual_kind === 'mixed') {
+          bootstrapState.mixedPlan = planMixedBranches(evidence)
+        }
         const memory = structuredBootstrapMemory(evidence)
         const ids = new Set()
         for (const id of Array.isArray(args.attachmentIds) ? args.attachmentIds : []) {
