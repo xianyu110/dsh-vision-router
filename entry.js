@@ -28,6 +28,23 @@ export const Config = core.Config
 export function apply(ctx, config = {}) {
   const logging = installVisionRouterFileLogging(ctx)
   const runtimeCtx = contextWithDelegatedReplay(logging.ctx)
+  // 启动诊断摘要只描述 composition/apply 的基础配置。设置服务可能稍后
+  // 覆盖这些值；每个图片轮还会记录 current() 的实时决策，避免把这个
+  // 启动快照误当成最终设置状态。
+  try {
+    const c = config && typeof config === 'object' ? config : {}
+    const local = c.localOllama && typeof c.localOllama === 'object' ? c.localOllama : {}
+    const lms = c.localLmStudio && typeof c.localLmStudio === 'object' ? c.localLmStudio : {}
+    logging.logger.info(
+      'vision-router: base config summary — instantDescribe=%s localDescribeStyle=%s localOllama=%s localLmStudio=%s',
+      c.instantDescribe === true ? 'on' : 'off',
+      c.localDescribeStyle === 'structured' ? 'structured' : 'plain',
+      local.enabled === true ? 'on' : 'off',
+      lms.enabled === true ? 'on' : 'off',
+    )
+  } catch {
+    /* diagnostics must never break apply */
+  }
   try {
     const result = core.apply(runtimeCtx, {
       ...config,

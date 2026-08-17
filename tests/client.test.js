@@ -415,7 +415,7 @@ test('manual update help uses a dedicated vertical command card', () => {
   assert.equal(source.includes("const commandStyle = {"), false)
 })
 
-test('the settings card skips offscreen paint and rebuilds model options once', () => {
+test('the settings card skips offscreen paint and reuses bounded model-option caches', () => {
   const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   // Long sections paint only when scrolled into view: the card hosts many
   // native selects whose option lists can reach hundreds of entries per
@@ -423,10 +423,12 @@ test('the settings card skips offscreen paint and rebuilds model options once', 
   assert.equal(source.includes('content-visibility:auto'), true)
   assert.equal(source.includes('contain-intrinsic-size:auto 96px'), true)
   // Option vnode lists are memoized and the per-provider model lists cached,
-  // so re-renders no longer rebuild hundreds of option elements.
+  // so re-renders no longer rebuild hundreds of option elements. The local
+  // vision merge keeps main's cache shape (Map) and does not memo visionGroups.
   assert.equal(source.includes('const groupOptions = useMemo('), true)
   assert.equal(source.includes('const visionGroupOptions = useMemo('), true)
   assert.equal(source.includes('const wrapGroupOptions = useMemo('), true)
+  assert.equal(source.includes('const visionGroups = filterVisionBackendGroups('), true)
   assert.equal(source.includes('modelOptionCache = React.useRef(new Map())'), true)
   assert.equal(source.includes('modelOptionsOf(modelsOf('), true)
   // The card is memoized with a stable props object so app re-renders of the
@@ -434,6 +436,65 @@ test('the settings card skips offscreen paint and rebuilds model options once', 
   assert.equal(source.includes('React.memo(VisionRouterCard)'), true)
   assert.equal(source.includes('const cardInject = { scope, getConnection, t, locale: ctx.locale }'), true)
   assert.equal(source.includes('inject: () => cardInject'), true)
+})
+
+test('local provider drafts preserve protocol and optional sampling fields', () => {
+  const bundle = loadClientBundle()
+  const defaults = { baseURL: 'http://local.test/v1', model: 'model-default' }
+  const formatted = bundle.normalizeLocalProviderDraft(
+    {
+      enabled: true,
+      baseURL: ' http://custom.test/v1 ',
+      model: ' model-id ',
+      format: 'anthropic',
+    },
+    defaults,
+  )
+  assert.deepEqual(formatted, {
+    enabled: true,
+    baseURL: ' http://custom.test/v1 ',
+    model: ' model-id ',
+    format: 'anthropic',
+    temperature: undefined,
+    top_p: undefined,
+  })
+  assert.deepEqual(bundle.parseLocalProviderDraft(formatted, defaults), {
+    enabled: true,
+    baseURL: 'http://custom.test/v1',
+    model: 'model-id',
+    format: 'anthropic',
+  })
+  assert.deepEqual(
+    bundle.parseLocalProviderDraft(
+      { enabled: true, format: 'openai', temperature: 9, top_p: -2 },
+      defaults,
+    ),
+    {
+      enabled: true,
+      baseURL: defaults.baseURL,
+      model: defaults.model,
+      format: 'openai',
+      temperature: 2,
+      top_p: 0,
+    },
+  )
+})
+
+test('local vision settings are complete, localized, responsive, and collapsed by default', () => {
+  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.equal(source.includes("const LOCAL_TOGGLE_KEYS = ['instantDescribe']"), true)
+  assert.equal(source.includes("const [showLocalVision, setShowLocalVision] = useState(false)"), true)
+  assert.equal(source.includes("'aria-controls': 'vr-local-vision-body'"), true)
+  assert.equal(source.includes("id: 'vr-local-vision-body'"), true)
+  assert.equal(source.includes("localRequestFormat: 'Request protocol'"), true)
+  assert.equal(source.includes("placeholder: t('localTemperaturePlaceholder')"), true)
+  assert.equal(source.includes("placeholder: t('localTopPPlaceholder')"), true)
+  assert.equal(source.includes("placeholder: t('localLmStudioModelPlaceholder')"), true)
+  assert.equal(source.includes("disabled: !writable, placeholder: '留空"), false)
+  assert.equal(source.includes('.vr-local-row{display:grid'), true)
+  assert.equal(source.includes('.vr-local-style{display:inline-flex'), true)
+  assert.equal(source.includes("key: style"), true)
+  assert.equal(source.includes("'vision_screenshot',"), true)
 })
 
 test('advisory capability diagnostics keep undeclared models selectable and support re-detection', () => {

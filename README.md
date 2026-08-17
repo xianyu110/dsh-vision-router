@@ -6,7 +6,7 @@
 
 <p align="center"><strong>Paste an image and it just works — eyes for text-only agents on DeepSeek Harness. Free out of the box, no key, no Python, one command.</strong></p>
 
-<p align="center">DeepSeek keeps thinking; the built-in free vision chain and eleven pixel-level tools do the seeing. Image turns behave like ordinary tool-calling turns — grounded, measurable, repeatable.</p>
+<p align="center">DeepSeek keeps thinking; the built-in free vision chain and thirteen deep tools do the seeing. Image turns behave like ordinary tool-calling turns — grounded, measurable, repeatable.</p>
 
 <p align="center">
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
@@ -187,10 +187,10 @@ Any of these channels can join the vision chain as an `httpProviders` entry (key
 ## Highlights
 
 - **Original pixels, real answers.** The vision chain reads the image at original resolution (auto-downscaled only to protect latency/quota); the agent's question travels with the image, so answers are about *your* question, not a generic description.
-- **Automatic failover with classified errors.** Region blocks, ToS filtering, 402 quota, 429 rate limits (with Retry-After backoff), context overflow, network failures — the chain walks providers one by one and only reports after all of them failed, with actionable advice.
+- **Automatic failover with classified errors.** Region blocks, ToS filtering, 402 quota, 429 rate limits, context overflow, network failures — the chain walks providers one by one and only reports after all of them failed, with actionable advice. A 429 immediately advances to the next backend and opens a Retry-After-aware cooldown instead of sleeping inside the request.
 - **Image memory.** Vision answers are cached by attachment content hash; later text turns substitute the recorded description (marked as untrusted evidence), so DeepSeek genuinely remembers earlier images without re-spending vision calls.
 - **A verifiable pixel loop.** Reference → `vision_html_screenshot` → `vision_pixel_diff` (ratio + red heatmap + worst-region ranking) → fix → repeat until the mismatch converges. UI restoration becomes measurable instead of eyeballed.
-- **Stable tool schema.** All eleven deep tools are registered from session start by default, avoiding a mid-conversation tool-list expansion that can invalidate long-context KV/prefix caches. `progressiveTools: true` remains an advanced boot-time opt-in; only then does `vision_activate` mount the tools on demand. See [`docs/progressive-tools-cache.md`](docs/progressive-tools-cache.md).
+- **Stable tool schema.** All thirteen deep tools are registered from session start by default, avoiding a mid-conversation tool-list expansion that can invalidate long-context KV/prefix caches. `progressiveTools: true` remains an advanced boot-time opt-in; only then does `vision_activate` mount the tools on demand. See [`docs/progressive-tools-cache.md`](docs/progressive-tools-cache.md).
 - **Selective proxy.** Only the configured vision provider hosts go through your local proxy; DeepSeek stays direct.
 
 ### Pixel loop in practice
@@ -211,24 +211,29 @@ The vision model is **only the eyes**; DeepSeek is **always the brain**. An imag
 
 ## Tools
 
-Default `progressiveTools: false`: all eleven deep tools stay registered from plugin startup, so text and image turns can call them immediately. If you explicitly set `progressiveTools: true` in the profile/composition `cordis.patch.yml`, progressive mode is restored: only `vision_activate` is exposed initially, the full tool set mounts on first use, and the `vision-tools` skill is registered. This is a boot-time switch; restart DSH after changing it. Built on sharp / potrace / tesseract / system Chrome — no Python:
+Default `progressiveTools: false`: all thirteen deep tools stay registered from plugin startup, so text and image turns can call them immediately. If you explicitly set `progressiveTools: true` in the profile/composition `cordis.patch.yml`, progressive mode is restored: only `vision_activate` is exposed initially, the full tool set mounts on first use, and the `vision-tools` skill is registered. This is a boot-time switch; restart DSH after changing it. Built on sharp / potrace / tesseract / system Chrome — no Python:
 
 <p align="center">
-  <img src="assets/vision-tools.svg" width="100%" alt="Eleven vision tools available in DSH Vision Router." />
+  <img src="assets/vision-tools.svg" width="100%" alt="Eleven image-processing tools available in DSH Vision Router." />
 </p>
+
+The diagram covers the eleven image-processing tools. `vision_present` (durable image delivery) and `vision_bootstrap` (the optional 1+x structured first pass) bring the default deep-tool set to thirteen. Enabling the privacy-gated `vision_screenshot` at boot adds an optional fourteenth tool.
 
 | Tool | What it does | Artifact |
 |---|---|---|
+| `vision_bootstrap` | Optional 1+x structured first visual pass; establishes task-independent evidence before at least one follow-up vision call | — |
 | `vision_describe` | Image Q&A / multi-image compare / structured-evidence JSON mode (summary + layout regions + entity inventory + verbatim transcription) | — |
 | `vision_ground` | Locate a target → **original-pixel box x1/y1/x2/y2** | annotated PNG (optional) |
 | `vision_detect` | Numbered inventory of every element of a kind (buttons/inputs/links…) with original-pixel boxes | annotated PNG with numbered boxes |
 | `vision_crop` | Crop and zoom into a pixel box | PNG |
+| `vision_present` | Publish a generated or edited local image as a durable chat attachment so the user can see it | image attachment |
 | `vision_pixel_diff` | Per-pixel comparison: diff ratio + worst 8×8-grid regions | red heatmap PNG + JSON report |
 | `vision_colors` | Dominant colors (hex + share) | — |
 | `vision_ocr` | Text transcription: local tesseract (chi_sim+eng) first, vision model fallback | — |
 | `vision_trace` | SVG vectorization (potrace posterization; icons/logos) | SVG |
 | `vision_extract_foreground` | Cutout via border flood fill (uniform backgrounds) | transparent PNG |
 | `vision_html_screenshot` | Screenshot a local HTML file (headless system Chrome); `fullPage: true` captures the whole page and reports `pageHeight` | PNG |
+| `vision_screenshot` | **Disabled by default; explicit opt-in required.** Capture the Windows virtual screen, macOS main display, or Linux root display. Windows uses PowerShell CopyFromScreen, macOS uses `screencapture`, and Linux requires ImageMagick `import` or `scrot`; optional `identify=true` tries enabled local recognition backends in order and returns the description with the path | PNG / + description |
 | `vision_long_screenshot_ocr` | Long-screenshot transcription: overlapping chunks, tesseract first / vision model fallback, stitched Markdown | chunk PNGs + Markdown + manifest |
 
 Formats are sniffed from magic bytes, so extensionless content-addressed attachment files work everywhere (no `.png` renaming needed).
@@ -239,6 +244,7 @@ Formats are sniffed from magic bytes, so extensionless content-addressed attachm
 vision_ground image="ref.png" target="the send button"
 vision_detect image="page.png" target="input fields"
 vision_crop   image="ref.png" region="1067,841,1108,881"
+vision_present path="rebuilt.png"
 vision_describe paths=["ref.png","impl.png"] question="list the differences" json=true
 vision_pixel_diff original="ref.png" rebuilt="screenshot.png"
 vision_ocr image="screenshot.png"
@@ -255,15 +261,17 @@ vision_long_screenshot_ocr image="chat-log.png" chunkHeight=1200 overlap=120
 The vision tools try backends in order and surface an error only after all of them fail:
 
 1. **User vision models**: one per settings row, top to bottom; only models under **Settings → Models** that explicitly declare image input are shown;
-2. **Advanced custom HTTP vision endpoints**: legacy/advanced `httpProviders`, when present, run after the user models;
-3. **Built-in anonymous OVH fallback**: always last and never exposed in a model picker. The current quality-first chain is `Qwen3.5-397B-A17B` → `Qwen2.5-VL-72B-Instruct` → `Qwen3.6-27B` → `Mistral-Small-3.2-24B-Instruct-2506` → `Qwen3.5-9B`. OVH anonymous limits are **2 requests/minute per IP per model**. The five models have independent buckets, so spreading requests across them is about **10 RPM in theory**, subject to OVH's actual rate limiting. No signup or API key is required. Want more headroom? See [Free vision key channels](#free-vision-key-channels) — a free OVH access key lifts this same endpoint to 400 requests/minute.
+2. **Local Ollama (optional, off by default)**: `localOllama.enabled` adds keyless, offline recognition through your local Ollama (for example qwen2.5vl);
+3. **Local LM Studio (optional, off by default)**: `localLmStudio.enabled` follows Ollama and requires the real model identifier shown in LM Studio Developer or returned by `/v1/models`;
+4. **Advanced custom HTTP vision endpoints**: legacy/advanced `httpProviders`, when present, run after the local backends;
+5. **Built-in anonymous OVH fallback**: always last and never exposed in a model picker. The current quality-first chain is `Qwen3.5-397B-A17B` → `Qwen2.5-VL-72B-Instruct` → `Qwen3.6-27B` → `Mistral-Small-3.2-24B-Instruct-2506` → `Qwen3.5-9B`. OVH anonymous limits are **2 requests/minute per IP per model**. The five models have independent buckets, so spreading requests across them is about **10 RPM in theory**, subject to OVH's actual rate limiting. No signup or API key is required. Want more headroom? See [Free vision key channels](#free-vision-key-channels) — a free OVH access key lifts this same endpoint to 400 requests/minute.
 
 > [!IMPORTANT]
 > This “vision chain” is the **eyes** used by Vision Router: each settings row selects one user vision model, while the lower-right chat picker selects the **brain/conversation model**. The two are deliberately separate. Text-only DeepSeek/opencode models are filtered out of the vision-backend dropdown, and the internal `Vision HTTP` transport route is no longer exposed to users.
 
 > In the legacy `routing: true` mode, the whole-turn chain walks only `provider + fallbacks` — `httpProviders` (including the free fallback) do not participate there. The default `routing: false` (tools-first) tries everything.
 
-Failures are classified (region / tos / quota / rate-limit / context / network) and the final error carries advice; `429` responses honor `Retry-After` once with a capped backoff. Oversized uploads are downscaled before the call (default budget 4 MP) to keep tool calls fast.
+Failures are classified (region / tos / quota / rate-limit / context / network) and the final error carries advice; a `429` advances immediately to the next backend and applies a capped, `Retry-After`-aware circuit-breaker cooldown. Oversized uploads are downscaled before the call (default budget 4 MP) to keep tool calls fast.
 
 ## Stealth mode
 
@@ -302,7 +310,7 @@ The Web profile registers a **视觉路由（自动识图）** card under **Sett
 - switches for legacy whole-turn routing, vision tools, image-block rewriting and stealth mode (official DeepSeek route only);
 - timeout, wrapper/chain route names, proxy and other advanced parameters;
 - every field shows an overridden badge with one-click reset plus discard/save;
-- a **Test connection** button probes the first vision provider and reports latency inline;
+- a **Test connection** button prioritizes an enabled local backend, verifies that its configured model appears in `/v1/models`, and otherwise probes the first usable vision provider;
 - artifact-producing tools render dedicated call cards with result facts and open-file buttons.
 
 <p align="center">
@@ -330,6 +338,12 @@ Everything is optional; defaults work out of the box. Edit via the Web card or a
 | `textProvider` | `deepseek-official` / `deepseek-v4-pro` | the model that reasons (your daily model) |
 | `tool` / `progressiveTools` / `autoActivateOnImage` | `true` / `false` / `true` | vision tools on / progressive mounting (off by default for a stable tool schema) / image-turn auto-mount when progressive mode is enabled; `progressiveTools` is boot-time config |
 | `rewriteImages` | `true` | rewrite image blocks in the model input (cached description or tool-hint marker); the UI log keeps images |
+| `desktopScreenshot` | `false` | privacy opt-in for the model-callable `vision_screenshot` desktop-capture tool; checked live before every capture |
+| `freeFallback` | `true` | append the anonymous OVH models after explicit local/custom HTTP backends; turning this off never disables an explicitly configured local backend |
+| `localOllama` | `{ enabled: false, baseURL: 'http://127.0.0.1:11434/v1', model: 'qwen2.5vl', format: 'openai' }` | **Local vision backend (merged from dsh-vision)**: when enabled, `local-ollama` leads the HTTP vision chain; skipped automatically when Ollama is down; `format` selects `openai` (`/chat/completions`) or `anthropic` (`/messages`); optional `temperature` / `top_p` are sent only when explicitly set, otherwise the local server default is respected |
+| `localLmStudio` | `{ enabled: false, baseURL: 'http://localhost:1234/v1', model: '', format: 'openai' }` | **Local LM Studio backend (merged from dsh-vision)**: follows Ollama and precedes custom/cloud HTTP backends; enabling it requires the real model identifier shown in LM Studio Developer or returned by `/v1/models`; supports the same optional sampling fields, while `format: 'anthropic'` requires LM Studio 0.4.1+ |
+| `instantDescribe` | `false` | **Instant local translation (merged from dsh-vision)**: when on and at least one local backend is usable, uncached image blocks are recognized before the first model step; Ollama is tried before LM Studio with a shared timeout budget, multi-image batches run concurrently (up to 3), and failures fall back to the static tool-hint marker |
+| `localDescribeStyle` | `plain` | **Local recognition output style (merged from dsh-vision)**: `plain` = flat description; `structured` = structured recognition (【初步判断】/【细节】/【空间结构】/【原图尺寸】), better for screenshot analysis |
 | `downscale` / `downscaleMaxPixels` | `true` / `4000000` | pre-call downscale and its pixel budget (latency guard) |
 | `cache` / `cacheTtlSeconds` / `cacheMaxEntries` | `true` / `3600` / `200` | vision answer cache |
 | `timeoutMs` | `120000` | per vision call deadline |
@@ -337,12 +351,57 @@ Everything is optional; defaults work out of the box. Edit via the Web card or a
 | `proxy` / `proxyHosts` | `''` / openrouter hosts | optional proxy for vision provider hosts only |
 | `catalogCorrections` | `true` | built-in catalog-routing corrections: when the installed pi-ai catalog routes a known model to the wrong wire protocol (e.g. `opencode-go/qwen3.6-plus` to OpenAI chat completions while OpenCode Go only serves it on `/v1/messages`), the plugin answers that backend directly over the corrected protocol. Each correction disarms itself once the catalog is fixed upstream |
 
+### Local Ollama vision backend (merged from dsh-vision)
+
+> **Incremental author**: [shaoqiuyuavailable](https://github.com/shaoqiuyuavailable) (router local-vision increment)
+>
+> **Design credit**: the local vision backends (Ollama / LM Studio dual backends, instant recognition,
+> structured output, screenshot identification, same-image memory dedup, failure-fallback placeholder,
+> concurrency anti-snowball, timeout protection) inherit their design from
+> [dsh-vision](https://github.com/shaoqiuyuavailable/text-llm-vision/tree/dsh-vision) —
+> merged into the HTTP vision chain here, with per-level fallback and dual-protocol support added on top.
+
+An optional keyless local-first vision path for private, free, offline recognition. It plugs into the existing HTTP vision chain as `local-ollama`; if it fails, any configured cloud backends can still be tried unless you deliberately configure a local-only chain.
+
+**1. Install Ollama and pull a vision model**
+
+```sh
+# https://ollama.com — then:
+ollama pull qwen2.5vl
+```
+
+**2. Enable it** — in the settings card's "Local vision" group, or via a profile patch:
+
+```yaml
+- id: vision-router
+  config:
+    localOllama:
+      enabled: true
+      baseURL: 'http://127.0.0.1:11434/v1'   # OpenAI-compatible endpoint
+      model: 'qwen2.5vl'
+      temperature: 0.5                        # optional; low temperature is steadier for recognition
+      top_p: 0.8                              # optional; unset = server default
+    instantDescribe: true                     # recognize images on the first model step
+    localDescribeStyle: 'structured'          # 'plain' | 'structured'
+```
+
+**3. What happens**
+
+- When enabled, `local-ollama` heads the HTTP vision chain. For a strict local-only setup, remove cloud vision rows/custom HTTP endpoints and turn off `freeFallback`.
+- **LM Studio works the same way** — enable `localLmStudio` in the same "Local vision" group with its OpenAI-compatible endpoint (default `http://localhost:1234/v1`) and enter the exact model identifier shown in Developer or `/v1/models`. It sits after `local-ollama` and before custom/cloud HTTP backends.
+- Each local backend can speak **OpenAI or Anthropic format** via `format` (default `openai`). Anthropic mode routes to `/v1/messages` with `anthropic-version` and base64 image sources; `x-api-key` is sent only when a key is configured. LM Studio needs version 0.4.1 or newer for this endpoint.
+- If a local backend is down or the call times out, its entry is skipped automatically and the chain falls through to the cloud backends — no call breaks.
+- `instantDescribe` tries enabled local backends in order (Ollama, then LM Studio) before the first model step. Multiple uncached images run concurrently (up to 3); one failed image does not block the others, and attachment-memory hits are reused without another local request.
+- `vision_screenshot` is disabled by default. After the separate Desktop screenshot opt-in, `identify=true` uses the same Ollama → LM Studio fallback.
+- Verify runtime decisions with `image turn — instantDescribe=… localBackends=…` and results with `instant local describe recognized N/M uncached image(s), C cached, F failed attempts` in the log.
+
 ## Requirements
 
 - DeepSeek Harness Web profile. Normal installs can use `npx @deepseek-ai/dsh ...`; source checkouts use `pnpm dsh ...`. A bare `dsh ...` command only works when the CLI is already on your shell `PATH`.
 - Node ≥ 22 (host side).
 - No API key for the default free chain; a credential reference (`apiKeyEnv`) only for paid `httpProviders`.
-- Chrome / Chromium / Edge only for `vision_html_screenshot`; every other tool works without a browser.
+- Chrome / Chromium / Edge is needed only for `vision_html_screenshot`; every other tool works without a browser.
+- Desktop capture is opt-in. Windows and macOS use OS-provided capture facilities; Linux needs ImageMagick `import` or `scrot` and a capturable desktop session (Wayland support depends on the environment).
 - Tesseract is optional: `vision_ocr` falls back to the vision model when the local engine is absent.
 
 ## Install and lifecycle
