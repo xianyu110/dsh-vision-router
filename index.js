@@ -314,6 +314,11 @@ export const Config = z.object({
   proxy: z.string().default(''),
   proxyHosts: z.array(z.string()).default([...DEFAULT_PROXY_HOSTS]),
   freeFallback: z.boolean().default(true),
+  // 云端免费优先：开启后，云端后端先尝试内置 OVH 免费模型（免注册、免
+  // API Key），付费 httpProviders 仅在免费模型全部失败后作为兜底，尽量把
+  // 云端识别成本降到零。默认关闭 = 保持既有顺序（用户配置在前、内置免费
+  // 补全在后），关闭时行为与 current main 逐字节一致。
+  freeCloudFirst: z.boolean().default(false),
   // Automatically mirror every currently registered provider as an
   // image-capable twin. The source registry is live (ctx.llm.listProviders),
   // so providers added later through Settings are picked up by the existing
@@ -1952,6 +1957,37 @@ export function httpProvidersOf(config, allowDefault = true) {
 }
 
 /**
+ * `freeCloudFirst` ordering: built-in keyless OVH free models first, paid
+ * `httpProviders` only as fallback. Pure reordering of `httpProvidersOf` —
+ * the function itself keeps main's shape (zero-regression gate), and with the
+ * switch off this returns its output byte-identically. The free set is ordered
+ * by the built-in table (largest -> smallest, quality first) so the ordering
+ * is stable and reproducible for the cache key. A user-configured entry that
+ * matches a built-in free model (same name/model/baseURL, no apiKeyEnv) is
+ * treated as free, so a manual OVH row cannot split the tier.
+ */
+export function orderedHttpProviders(config = {}, freeFirst = false) {
+  const providers = httpProvidersOf(config, config.freeFallback !== false)
+  if (!freeFirst) return providers
+  const isBuiltinFree = (p) =>
+    !!p &&
+    DEFAULT_HTTP_PROVIDERS.some(
+      (candidate) =>
+        candidate.name === p.name &&
+        candidate.model === p.model &&
+        candidate.baseURL.replace(/\/$/, '') === String(p.baseURL ?? '').replace(/\/$/, '') &&
+        (p.apiKeyEnv ?? '') === '',
+    )
+  const free = providers.filter(isBuiltinFree).sort((a, b) => {
+    const ia = DEFAULT_HTTP_PROVIDERS.findIndex((c) => c.name === a.name && c.model === a.model)
+    const ib = DEFAULT_HTTP_PROVIDERS.findIndex((c) => c.name === b.name && c.model === b.model)
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib)
+  })
+  const rest = providers.filter((p) => !isBuiltinFree(p))
+  return [...free, ...rest]
+}
+
+/**
  * Drop http providers already covered by a `vision-http` pair, so the free
  * endpoint (2 req/min) is never asked twice for the same image.
  */
@@ -2839,7 +2875,7 @@ export function apply(ctx, config = {}) {
     (Number.isFinite(config.cacheTtlSeconds) ? config.cacheTtlSeconds : 3600) * 1000,
   )
   const httpProviders = () => {
-    const raw = httpProvidersOf(current(), current().freeFallback !== false)
+    const raw = orderedHttpProviders(current(), current().freeCloudFirst === true)
     return dedupeHttpProviders(
       pairs().filter((pair) => pair && pair.provider !== 'vision-http'),
       raw,
@@ -3104,7 +3140,7 @@ export function apply(ctx, config = {}) {
   // the vision_describe tool fallback, so the free endpoint is never asked
   // twice for the same image.)
   const httpRouteProviders = () =>
-    httpProvidersOf(current(), current().freeFallback !== false)
+    orderedHttpProviders(current(), current().freeCloudFirst === true)
   // Settings are injected after apply() and can change while DSH stays alive.
   // Build entries per operation so enabling/disabling a local backend or
   // changing its URL/model/protocol takes effect on the next request. The

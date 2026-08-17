@@ -10,6 +10,7 @@ import {
   callLocalBackend,
   imageMemorySet,
   localDescribePrompt,
+  orderedHttpProviders,
   DEFAULT_HTTP_PROVIDERS,
 } from '../index.js'
 import { callAnthropicCompatible } from '../lib/catalog-corrections.js'
@@ -172,4 +173,28 @@ test('gate: plain prompt is unchanged from the local vision design', () => {
   assert.match(prompt, /详细描述这张图片/)
   assert.match(prompt, /照抄原文/)
   assert.equal(prompt.includes('【输入图尺寸】'), false)
+})
+
+test('gate: orderedHttpProviders is byte-identical to httpProvidersOf while freeCloudFirst is off', () => {
+  // The new switch must not alter anything under its default (off) state:
+  // every config that httpProvidersOf already serves returns the same list.
+  const empty = { httpProviders: [] }
+  assert.deepEqual(orderedHttpProviders(empty), DEFAULT_HTTP_PROVIDERS)
+  assert.deepEqual(orderedHttpProviders(empty, false), httpProvidersOf(empty))
+  const custom = {
+    httpProviders: [
+      { name: 'custom', baseURL: 'http://custom.test/v1', model: 'm', apiKeyEnv: '' },
+    ],
+  }
+  assert.deepEqual(orderedHttpProviders(custom, false), httpProvidersOf(custom))
+  // freeFallback=false still wins: without the built-in tier there is nothing
+  // to reorder, so the switch is a no-op (configured list only).
+  const noFallback = {
+    freeFallback: false,
+    httpProviders: [
+      { name: 'custom', baseURL: 'http://custom.test/v1', model: 'm', apiKeyEnv: '' },
+    ],
+  }
+  assert.deepEqual(orderedHttpProviders(noFallback, true), noFallback.httpProviders)
+  assert.deepEqual(orderedHttpProviders(noFallback, false), noFallback.httpProviders)
 })
