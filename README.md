@@ -456,6 +456,14 @@ This removes the dependency and the bundle layer. If you disabled the stock Deep
 
 ## Troubleshooting
 
+### Using dsh-web-ui / dsh-web-ui-all together
+
+If `dsh-web-ui` / `@linxin666/dsh-web-ui-all` is installed alongside Vision Router, its `dsh-tool-describe-image` send hook can rewrite image uploads into `describe-image` references before downstream vision plugins receive the original image block.
+
+`dsh-web-ui` now provides an explicit compatibility switch. Go to **Settings → Plugin config → Image understanding** and turn off **“Rewrite images to describe-image references on send”**, or set `interceptImageSend: false`. Image sends will then pass through unchanged so `dsh-vision-router` can receive the original image block. The switch is read on every send, so no hook reinstall or DSH restart is required.
+
+See [dsh-web-ui#301](https://github.com/zhu1090093659/dsh-web-ui/issues/301) for the upstream compatibility change.
+
 ### Startup fails with `Unexpected token ... is not valid JSON` (UTF-8 BOM)
 
 **Symptom:** `dsh web` / `pnpm dsh web` exits immediately at startup:
