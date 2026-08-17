@@ -15,6 +15,9 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
       - name: Clone wiki
         shell: bash
         run: |
@@ -23,616 +26,118 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki
 
-      - name: Write wiki pages
+      - name: Build wiki pages from current docs
         shell: bash
         run: |
           set -euo pipefail
-          cd wiki
-
-          cat > Home.md <<'WIKI_EOF'
-# dsh-vision-router Wiki
-
-> 给 DeepSeek Harness 文本模型补上真正可迭代的视觉能力：**DeepSeek 负责推理，视觉后端负责看图。**
-
-这是 `dsh-vision-router` 的完整使用文档入口。README 保持项目介绍和快速上手；更详细的配置、后端、故障排查与架构说明放在这里。
-
-## 30 秒开始
-
-```sh
-npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
-```
-
-安装后：
-
-1. 回到聊天页；
-2. 在右下角模型选择器中选择带 **`+ Auto Vision`** 的模型组；
-3. 直接粘贴或上传图片；
-4. 正常提问即可。
-
-> **最常见误区：**右下角模型选择器选的是“脑”（对话/推理模型），Settings 里的 Vision backend 选的是“眼睛”（看图模型）。两者是分开的。
-
-## 文档导航
-
-- **[Getting Started](Getting-Started)** — 安装、升级、卸载、Web / Oh-DSH Desktop
-- **[Settings Reference](Settings-Reference)** — 设置页各项到底做什么
-- **[Vision Providers](Vision-Providers)** — 免费链、Ollama、LM Studio、自定义视觉后端
-- **[Troubleshooting](Troubleshooting)** — 图片发送失败、插件冲突、升级/启动问题
-- **[Architecture](Architecture)** — `1+x` 视觉工作流、brain/eyes 分离、fallback 与缓存
-
-## 项目核心能力
-
-- **开箱即用免费视觉**：内置匿名 OVHcloud 多模型 fallback，不配置 key 也能用。
-- **1+x 多步视觉**：先做一次结构化预识别，再由 agent 根据证据自由调用一个或多个视觉工具继续验证和深入。
-- **原图留在视觉侧**：不是把图片先压成一段描述后就结束；agent 可以继续 grounding、crop、OCR、pixel diff 等多步操作。
-- **本地视觉**：可选 Ollama / LM Studio，支持本地优先、离线识别和 instant describe。
-- **DeepSeek 保持主脑**：文本轮不需要切换成视觉模型。
-- **无 Python runtime**：核心图像工具链走 Node.js 生态。
-
-## 当前稳定线
-
-Wiki 以 `main` 上的稳定实现为准。实验分支（例如 v2 capability-aware / scene routing）不会在这里当作稳定功能承诺。
-
-- Repository: https://github.com/ysr666/dsh-vision-router
-- 中文 README: https://github.com/ysr666/dsh-vision-router/blob/main/README.zh.md
-- Issues: https://github.com/ysr666/dsh-vision-router/issues
-- QQ 交流群：`1105463028`
-WIKI_EOF
-
-          cat > Getting-Started.md <<'WIKI_EOF'
-# Getting Started
-
-## 1. 安装
-
-正常 npm / npx 安装只需要一条命令：
-
-```sh
-npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
-```
-
-如果你从 DeepSeek Harness 源码仓库运行：
-
-```sh
-cd deepseek-harness
-pnpm dsh plugin --profile web add dsh-vision-router
-```
-
-如果插件刚安装进一个已经长期运行的 DSH Web 进程，让 Web 进程重新加载一次以发现插件 bundle。**插件加载完成后，模型目录和 wrapper scope 的变化可热更新，通常不需要再次重启。**
-
-## 2. 选择正确的模型组
-
-Vision Router 默认不会篡改原来的模型组，而是创建同名的视觉包装组，例如：
-
-```text
-opencode-go
-opencode-go + Auto Vision
-```
-
-发送图片前，请在聊天输入框右下角选择带 **`+ Auto Vision`** 的组。
-
-如果仍然使用原始纯文本模型组，DSH 可能会在 Vision Router 接管图片前就报：
-
-```text
-the current model does not support images
-```
-
-这通常不是视觉后端坏了，而是选错了聊天模型入口。
-
-## 3. 发送图片
-
-可以像普通聊天一样：
-
-- 直接粘贴图片；
-- 上传图片附件；
-- 让 agent 在工作区内继续对图片做 crop / OCR / grounding / pixel diff 等多步分析。
-
-默认免费视觉链已经存在，不需要先注册 API key。
-
-## 4. Oh-DSH Desktop
-
-Oh-DSH Desktop 使用自己的 DSH home 和 `desktop` profile，不读取普通 `~/.dsh` 的 Web profile。
-
-macOS / Linux：
-
-```sh
-DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add dsh-vision-router
-```
-
-Windows PowerShell：
-
-```powershell
-$env:DSH_HOME = "$env:USERPROFILE\.ohdsh"
-npx @deepseek-ai/dsh plugin --profile desktop add dsh-vision-router
-```
-
-不要同时混用 Desktop marketplace 安装和上面的直接命令。
-
-## 5. 升级
-
-建议显式指定目标版本，尤其是刚发布不到 24 小时的新版本：
-
-```sh
-npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router@<version>
-```
-
-如果出现新版本已经发布但 pnpm 显示 `downloaded 0` / `added 0`：
-
-```sh
-npx dsh-vision-router repair
-```
-
-## 6. 卸载
-
-```sh
-npx @deepseek-ai/dsh plugin --profile web remove dsh-vision-router
-```
-
-源码 checkout：
-
-```sh
-pnpm dsh plugin --profile web remove dsh-vision-router
-```
-
-如果你曾经为了 stealth mode 手动禁用了官方 DeepSeek row，卸载后记得重新启用它。
-
-## 下一步
-
-- 想换成本地 Ollama / LM Studio：看 **[Vision Providers](Vision-Providers)**
-- 想弄懂设置页：看 **[Settings Reference](Settings-Reference)**
-- 出现报错：看 **[Troubleshooting](Troubleshooting)**
-WIKI_EOF
-
-          cat > Settings-Reference.md <<'WIKI_EOF'
-# Settings Reference
-
-Web 设置入口：
-
-**Settings → Plugins → Plugin config → 视觉路由（自动识图）**
-
-大多数用户只需要确认自动视觉包装开启，然后回聊天页选 `+ Auto Vision`。其余项目主要用于高级定制。
-
-## 最重要的几个设置
-
-| 设置 | 默认 | 用途 |
-|---|---:|---|
-| `autoWrapProviders` | `true` | 自动为已启用模型生成同名 `+ Auto Vision` 组 |
-| `wrappedProviders` | DeepSeek 默认 scope | 手动限制哪些 provider/model 生成视觉包装；通常不需要改 |
-| `routing` | `false` | `false` = 推荐的 tools-first 多步视觉；`true` = 旧式整轮路由 |
-| `tool` | `true` | 启用视觉工具 |
-| `rewriteImages` | `true` | 仅在模型调用输入里改写图片提示；会话 UI 仍保留原图 |
-| `stealth` | `false` | 接管官方 DeepSeek route；普通用户建议保持关闭 |
-| `freeFallback` | `true` | 显式后端失败后继续使用内置匿名 OVH 免费链 |
-| `desktopScreenshot` | `false` | 允许模型调用桌面截图；隐私敏感，必须显式开启 |
-
-## Vision backend chain
-
-这里配置的是“眼睛”，不是聊天模型。
-
-调用顺序大致为：
-
-1. 用户配置的视觉模型；
-2. Ollama；
-3. LM Studio；
-4. 自定义 HTTP 视觉 endpoint；
-5. 内置匿名 OVH fallback。
-
-详见 **[Vision Providers](Vision-Providers)**。
-
-## Local vision
-
-### Ollama
-
-```yaml
-localOllama:
-  enabled: false
-  baseURL: http://127.0.0.1:11434/v1
-  model: qwen2.5vl
-  format: openai
-```
-
-### LM Studio
-
-```yaml
-localLmStudio:
-  enabled: false
-  baseURL: http://localhost:1234/v1
-  model: ''
-  format: openai
-```
-
-LM Studio 的 `model` 应填写 Developer 页面或 `/v1/models` 返回的真实模型 ID。
-
-### Instant describe
-
-| 设置 | 默认 | 说明 |
-|---|---:|---|
-| `instantDescribe` | `false` | 首个模型 step 前先用可用的本地 VLM 识别未缓存图片 |
-| `localDescribeStyle` | `plain` | `plain` 平铺描述；`structured` 更适合 UI / 截图结构分析 |
-
-本地识别失败不会把整轮聊天打崩；它会按链路继续 fallback。
-
-## 性能与可靠性
-
-| 设置 | 默认 | 说明 |
-|---|---:|---|
-| `downscale` | `true` | 大图在视觉调用前自动缩放 |
-| `downscaleMaxPixels` | `4000000` | 默认 4MP 像素预算 |
-| `cache` | `true` | 缓存视觉回答 |
-| `cacheTtlSeconds` | `3600` | 默认缓存 1 小时 |
-| `cacheMaxEntries` | `200` | 最大缓存条目 |
-| `timeoutMs` | `120000` | 单次视觉调用 deadline |
-| `artifactsDir` | `.dsh-vision-router/artifacts` | crop / diff / screenshot 等产物目录 |
-
-## Advanced routing
-
-- `wrapperRoute`：默认 `deepseek-vision`
-- `chainRoute`：默认 `vision-chain`
-- `textProvider`：推理主脑 route/model
-- `progressiveTools`：渐进挂载工具；默认关闭以保持 tool schema 稳定
-- `autoActivateOnImage`：progressive mode 下遇图自动挂载
-- `catalogCorrections`：对已知上游模型 catalog/wire-protocol 错配做临时修正；上游修好后对应修正自动失效
-
-## 设置修改是否需要重启？
-
-多数运行时设置和模型目录变化会热更新。只有插件 bundle 第一次被一个长期运行的进程发现时，通常需要让对应 DSH 进程重新加载一次。
-WIKI_EOF
-
-          cat > Vision-Providers.md <<'WIKI_EOF'
-# Vision Providers
-
-Vision Router 把“脑”和“眼睛”分开：
-
-- **Brain**：聊天右下角选择的 DeepSeek / opencode 等推理模型；
-- **Eyes**：Settings 中配置的视觉模型链。
-
-一个 text-only brain 完全可以配一个独立的视觉 backend。
-
-## 默认 fallback 顺序
-
-在 tools-first 模式下，视觉工具会依次尝试：
-
-1. **用户视觉模型**：Settings 中明确配置的 vision backend rows；
-2. **Ollama**：可选、默认关闭；
-3. **LM Studio**：可选、默认关闭；
-4. **Custom HTTP**：高级 OpenAI-compatible / compatible endpoint；
-5. **匿名 OVHcloud 免费链**：默认最后兜底。
-
-429 / 网络 / quota / region 等失败会被分类，并继续尝试下一后端。匿名免费链不需要账号或 API key。
-
-## 内置免费链
-
-当前稳定线使用多个 OVHcloud 匿名模型作为最后 fallback。匿名额度按模型/IP 分桶，适合开箱即用和低到中频使用。
-
-如果免费匿名额度不够，推荐在 Settings 中配置你自己的免费/付费视觉模型，让它排在匿名 fallback 前面。
-
-> 免费额度和模型目录会变化；以 provider 控制台和仓库当前 README 为准。
-
-## Ollama：本地优先
-
-先安装 Ollama 并拉一个视觉模型，例如：
-
-```sh
-ollama pull qwen2.5vl
-```
-
-然后开启：
-
-```yaml
-- id: vision-router
-  config:
-    localOllama:
-      enabled: true
-      baseURL: 'http://127.0.0.1:11434/v1'
-      model: 'qwen2.5vl'
-    instantDescribe: true
-    localDescribeStyle: structured
-```
-
-特点：
-
-- 无 key；
-- 可离线；
-- backend 挂掉会自动跳过；
-- 可作为 instant describe 的第一本地后端；
-- 支持 `openai` / `anthropic` format。
-
-## LM Studio
-
-默认 endpoint：
-
-```text
-http://localhost:1234/v1
-```
-
-开启后请填写 LM Studio Developer 页面或 `/v1/models` 给出的真实 model ID。
-
-LM Studio 位于 Ollama 之后、自定义/cloud HTTP 后端之前。Anthropic `/v1/messages` 模式需要 LM Studio 0.4.1+。
-
-## 严格 local-only
-
-如果你想让图片完全不发到云端：
-
-1. 开启 Ollama 和/或 LM Studio；
-2. 移除 cloud vision rows / custom HTTP endpoints；
-3. 关闭 `freeFallback`；
-4. 如使用 `vision_screenshot`，仍需单独开启桌面截图权限。
-
-## 自定义视觉模型
-
-每个 Settings row 指定一个可调用的 provider/model。运行时优先尝试 DSH 已注册 adapter；只有确认存在 HTTP OpenAI Chat Completions 兼容入口时，才走 direct compatibility bridge。
-
-不要把只会文本的模型误当作视觉 backend。聊天模型是否支持图片与它能否作为 brain 是两个不同问题。
-WIKI_EOF
-
-          cat > Troubleshooting.md <<'WIKI_EOF'
-# Troubleshooting
-
-## `the current model does not support images`
-
-**最常见原因：选错模型组。**
-
-回到聊天页右下角，把原始文本模型组切成对应的 **`+ Auto Vision`** 模型组，再重新发送图片。
-
-## 和 dsh-web-ui / dsh-web-ui-all 冲突
-
-`dsh-web-ui` / `@linxin666/dsh-web-ui-all` 的图片 send hook 可能先把原图改写成 `describe-image` 引用，导致 Vision Router 收不到原始 image block。
-
-在它的设置里找到 Image understanding，关闭：
-
-**“Rewrite images to describe-image references on send”**
-
-等价配置：
-
-```yaml
-interceptImageSend: false
-```
-
-这个开关按每次发送实时读取，一般无需重装 hook 或重启 DSH。
-
-## 新版本发布了但升级还是旧版
-
-pnpm v11 对发布不到 24 小时的版本可能有 age gate。显式指定版本：
-
-```sh
-npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router@<version>
-```
-
-或者：
-
-```sh
-npx dsh-vision-router repair
-```
-
-## 启动时报 JSON / `Unexpected token` / BOM
-
-先诊断：
-
-```sh
-npx dsh-vision-router doctor --profile web
-```
-
-修复 UTF-8 BOM：
-
-```sh
-npx dsh-vision-router repair --profile web
-```
-
-repair 只移除 BOM 并重新验证 JSON，不会乱改其它配置。
-
-## `duplicate loader entry id: vision-router`
-
-通常是早期 v0.x 手动安装留下了重复的 `insert` block。
-
-检查：
-
-```text
-~/.dsh/profiles/<profile>/cordis.patch.yml
-```
-
-删除旧的：
-
-```yaml
-- insert:
-    - id: vision-router
-      name: dsh-vision-router
-```
-
-如果需要保留自定义参数，改成普通 by-id override，而不是再次 `insert`。
-
-## `colourspace: parameter space not set`
-
-通常是旧版 profile 里残留的 sharp 0.34.0 / libvips 与 host sharp 冲突。
-
-删除 profile 下旧的：
-
-```text
-node_modules/sharp
-node_modules/@img
-```
-
-然后重启，或在 profile 内重新 `pnpm install`。
-
-## Oh-DSH Desktop 安装后打不开
-
-Oh-DSH 使用：
-
-```text
-~/.ohdsh
-```
-
-而不是普通 `~/.dsh`。请使用 desktop profile 安装：
-
-```sh
-DSH_HOME=~/.ohdsh npx @deepseek-ai/dsh plugin --profile desktop add dsh-vision-router
-```
-
-较老 Desktop runtime 与旧版 Vision Router 曾存在启动冲突；建议使用当前版本。
-
-## Ollama / LM Studio 没反应
-
-依次确认：
-
-1. 本地服务本身已启动；
-2. `baseURL` 正确；
-3. 配置的模型真实存在；
-4. LM Studio 使用 `/v1/models` 返回的真实 ID；
-5. 点击 Settings 里的 **Test connection**；
-6. 检查是否被代理软件错误代理了 `localhost` / `127.0.0.1`。
-
-本地后端失败后，默认会继续 fallback 到后续视觉 backend；这属于预期行为。
-
-## 桌面截图工具不可用
-
-`vision_screenshot` 涉及隐私，默认关闭。需要单独开启 `desktopScreenshot`。
-
-- macOS / Windows 使用系统截图能力；
-- Linux 需要 ImageMagick `import` 或 `scrot`，且必须处于可截图的桌面 session；
-- Wayland 是否可用取决于桌面环境。
-
-## 仍然有问题
-
-提交 Issue 时建议附：
-
-- DSH 版本；
-- dsh-vision-router 版本；
-- Web / Oh-DSH Desktop / 其它运行方式；
-- 使用的 brain model group；
-- 使用的 vision backend；
-- 最小复现步骤；
-- 相关日志（注意先移除 key / token）。
-
-Issues: https://github.com/ysr666/dsh-vision-router/issues
-WIKI_EOF
-
-          cat > Architecture.md <<'WIKI_EOF'
-# Architecture
-
-## 一句话
-
-`dsh-vision-router` 不是“把图片描述一次再塞给 DeepSeek”这么简单，而是把 **视觉当成 agent 可以反复调用的证据工具层**。
-
-```text
-User image
-   │
-   ▼
-Auto Vision wrapper
-   │
-   ├─ pass 1: structured visual bootstrap
-   │            │
-   │            ▼
-   │      task-independent visual map
-   │
-   └─ x follow-up evidence calls (x >= 1)
-          ├─ vision_describe
-          ├─ vision_ground / vision_detect
-          ├─ vision_crop
-          ├─ vision_ocr
-          ├─ vision_pixel_diff
-          └─ ...
-                   │
-                   ▼
-             DeepSeek reasoning
-```
-
-这就是 **`1+x`**：第一次是固定职责的结构化预识别，后面不是固定“再识别一次”，而是 agent 根据不确定性和任务自由选择一个或多个后续视觉工具。
-
-## Pass 1：结构化预识别
-
-第一遍不应该提前替用户完成任务，而是建立一个 task-independent 的视觉地图，包含：
-
-- `visual_kind`
-- overview
-- regions / layout
-- visible text
-- entities
-- relationships
-- uncertainties
-- recommended follow-ups
-
-它的目标是保留高信息密度证据，让后面的 text agent 知道哪里值得继续看，而不是把整张图压缩成一句描述。
-
-图片里的文字始终被当作**不可信证据**，而不是要执行的系统指令。
-
-## x：自由工具调用
-
-Bootstrap 之后必须有至少一次后续证据调用。具体调用次数和工具由任务决定，例如：
-
-### UI 复刻
-
-```text
-bootstrap → detect controls → crop target → pixel diff → screenshot verify
-```
-
-### 文档/表格
-
-```text
-bootstrap → focused describe → OCR uncertain region → structured answer
-```
-
-### 普通图片问答
-
-```text
-bootstrap → focused describe → answer
-```
-
-所以它不是固定 `1+1`，而是 **`1+x`**。
-
-## Brain / Eyes 分离
-
-- **Brain**：DeepSeek / opencode 等日常推理模型；
-- **Eyes**：独立视觉 backend chain。
-
-用户在聊天页选择的是 brain wrapper（`+ Auto Vision`）；Settings 中选择的是 eyes。
-
-文本轮继续由原模型处理，视觉模型只在需要“看”的时候被调用。
-
-## 为什么保留原图
-
-会话 UI 继续显示原始图片。Vision Router 的 image rewrite 发生在模型调用输入层，而不是把会话历史永久替换成描述文本。
-
-这样 agent 可以围绕同一原图继续做：
-
-- grounding / detection；
-- crop；
-- OCR；
-- color / pixel-level comparison；
-- screenshot verification；
-- 多轮视觉追问。
-
-## Fallback chain
-
-工具调用失败不会立刻结束整轮任务，而是继续尝试下一视觉 backend。链路可以同时包含：
-
-```text
-user VLM → Ollama → LM Studio → custom HTTP → anonymous OVH
-```
-
-错误会区分 rate limit、quota、network、region、context 等类型。429 会尽快切到下一后端，并使用受限的 cooldown。
-
-## Cache / image memory
-
-同一图片的重复视觉请求会结合内容缓存和 image memory，减少无意义的重复识别。本地 instant describe 也会复用已经命中的图片结果。
-
-## Stable vs experimental
-
-本页只描述 `main` 已落地的稳定结构。
-
-v2 capability-aware routing / scene routing 仍属于实验开发线；等稳定并入 `main` 后再进入 Wiki 的正式架构说明。
-WIKI_EOF
-
-          cat > _Sidebar.md <<'WIKI_EOF'
-### dsh-vision-router
-
-- **[Home](Home)**
-- **[Getting Started](Getting-Started)**
-- **[Settings Reference](Settings-Reference)**
-- **[Vision Providers](Vision-Providers)**
-- **[Troubleshooting](Troubleshooting)**
-- **[Architecture](Architecture)**
-
----
-
-[Repository](https://github.com/ysr666/dsh-vision-router) · [Issues](https://github.com/ysr666/dsh-vision-router/issues) · [中文 README](https://github.com/ysr666/dsh-vision-router/blob/main/README.zh.md)
-WIKI_EOF
+          section() {
+            awk -v start="$1" -v end="$2" '$0 == start {p=1} p && $0 == end {exit} p' README.md
+          }
+          rewrite_assets() {
+            sed 's#src="assets/#src="https://raw.githubusercontent.com/ysr666/dsh-vision-router/main/assets/#g'
+          }
+
+          {
+            printf '%s\n' '# dsh-vision-router Wiki'
+            printf '%s\n' ''
+            printf '%s\n' '> 给 DeepSeek Harness 文本模型补上真正可迭代的视觉能力：**DeepSeek 负责推理，视觉后端负责看图。**'
+            printf '%s\n' ''
+            printf '%s\n' 'README 负责项目首页和快速介绍；Wiki 负责完整使用手册。'
+            printf '%s\n' ''
+            printf '%s\n' '## 30 秒开始'
+            printf '%s\n' ''
+            printf '%s\n' '```sh'
+            printf '%s\n' 'npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router'
+            printf '%s\n' '```'
+            printf '%s\n' ''
+            printf '%s\n' '安装后回到聊天页，在右下角选择带 **`+ Auto Vision`** 的模型组，然后直接粘贴或上传图片。'
+            printf '%s\n' ''
+            printf '%s\n' '> **记住：**聊天模型选择器选的是 brain；Settings 中的 Vision backend 选的是 eyes。两者相互独立。'
+            printf '%s\n' ''
+            printf '%s\n' '## 文档导航'
+            printf '%s\n' ''
+            printf '%s\n' '- **[Getting Started](Getting-Started)** — 安装、升级、卸载、Oh-DSH Desktop'
+            printf '%s\n' '- **[Settings Reference](Settings-Reference)** — 设置页与完整配置'
+            printf '%s\n' '- **[Vision Providers](Vision-Providers)** — 免费链、用户 VLM、本地与 fallback'
+            printf '%s\n' '- **[Troubleshooting](Troubleshooting)** — 常见安装、冲突与运行问题'
+            printf '%s\n' '- **[Architecture](Architecture)** — tools-first、`1+x`、工具层与 brain/eyes 分离'
+            printf '%s\n' ''
+            printf '%s\n' '## 当前稳定架构'
+            printf '%s\n' ''
+            printf '%s\n' '当前 `main` 已包含 `vision_bootstrap`：先做一次 task-independent 的结构化视觉预识别，再由 agent 根据不确定性和任务自由调用一个或多个后续视觉工具。也就是 **`1+x`，不是固定 `1+1`**。'
+            printf '%s\n' ''
+            printf '%s\n' '实验性的 v2 capability-aware / scene routing 分支不会在稳定 Wiki 中提前承诺。'
+            printf '%s\n' ''
+            printf '%s\n' '- [Repository](https://github.com/ysr666/dsh-vision-router)'
+            printf '%s\n' '- [中文 README](https://github.com/ysr666/dsh-vision-router/blob/main/README.zh.md)'
+            printf '%s\n' '- [Issues](https://github.com/ysr666/dsh-vision-router/issues)'
+            printf '%s\n' '- QQ 交流群：`1105463028`'
+          } > wiki/Home.md
+
+          {
+            printf '%s\n' '# Getting Started'
+            printf '%s\n' ''
+            section '## Quick start' '## Free vision key channels'
+            printf '%s\n' ''
+            section '## Install and lifecycle' '## Troubleshooting'
+          } | rewrite_assets > wiki/Getting-Started.md
+
+          {
+            printf '%s\n' '# Settings Reference'
+            printf '%s\n' ''
+            printf '%s\n' '> Web 入口：**Settings → Plugins → Plugin config → 视觉路由（自动识图）**。普通用户通常只需要选择 `+ Auto Vision`；其余配置用于后端、性能、隐私和高级路由。'
+            printf '%s\n' ''
+            section '## Web settings' '## Requirements'
+          } | rewrite_assets > wiki/Settings-Reference.md
+
+          {
+            printf '%s\n' '# Vision Providers'
+            printf '%s\n' ''
+            printf '%s\n' '> Brain 是聊天推理模型；Eyes 是下面这条视觉 backend chain。一个 text-only brain 完全可以使用独立 VLM 看图。'
+            printf '%s\n' ''
+            section '## Free vision key channels' '## Highlights'
+            printf '%s\n' ''
+            section '## Provider fallback chain' '## Stealth mode'
+          } | rewrite_assets > wiki/Vision-Providers.md
+
+          {
+            printf '%s\n' '# Troubleshooting'
+            printf '%s\n' ''
+            printf '%s\n' '> 最先检查：发送图片前，聊天右下角是否选中了带 **`+ Auto Vision`** 的模型组。'
+            printf '%s\n' ''
+            section '## Troubleshooting' '## Security notes'
+          } | rewrite_assets > wiki/Troubleshooting.md
+
+          {
+            printf '%s\n' '# Architecture'
+            printf '%s\n' ''
+            printf '%s\n' '## `1+x`：结构化预识别 + 自由证据调用'
+            printf '%s\n' ''
+            printf '%s\n' '`vision_bootstrap` 的 pass 1 只建立 task-independent visual map：visual kind、regions、visible text、entities、relationships、uncertainties 和 recommended follow-ups。它不应该提前替用户完成任务。'
+            printf '%s\n' ''
+            printf '%s\n' 'Bootstrap 之后至少再做一次证据调用；具体是 describe、detect、ground、crop、OCR、pixel diff，还是连续多次调用，由 agent 根据任务决定。因此这是 **`1+x`**，而不是固定的两次识别。'
+            printf '%s\n' ''
+            printf '%s\n' '```text'
+            printf '%s\n' 'image → structured bootstrap → x follow-up vision calls → DeepSeek reasoning'
+            printf '%s\n' '```'
+            printf '%s\n' ''
+            section '## How it works' '## Provider fallback chain'
+          } | rewrite_assets > wiki/Architecture.md
+
+          {
+            printf '%s\n' '### dsh-vision-router'
+            printf '%s\n' ''
+            printf '%s\n' '- **[Home](Home)**'
+            printf '%s\n' '- **[Getting Started](Getting-Started)**'
+            printf '%s\n' '- **[Settings Reference](Settings-Reference)**'
+            printf '%s\n' '- **[Vision Providers](Vision-Providers)**'
+            printf '%s\n' '- **[Troubleshooting](Troubleshooting)**'
+            printf '%s\n' '- **[Architecture](Architecture)**'
+            printf '%s\n' ''
+            printf '%s\n' '---'
+            printf '%s\n' ''
+            printf '%s\n' '[Repository](https://github.com/ysr666/dsh-vision-router) · [Issues](https://github.com/ysr666/dsh-vision-router/issues) · [中文 README](https://github.com/ysr666/dsh-vision-router/blob/main/README.zh.md)'
+          } > wiki/_Sidebar.md
 
       - name: Commit and push wiki
         shell: bash
