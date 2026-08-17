@@ -453,6 +453,14 @@ pnpm dsh plugin --profile web remove dsh-vision-router
 
 ## 故障排查
 
+### 与 dsh-web-ui / dsh-web-ui-all 共存
+
+如果同时安装了 `dsh-web-ui` / `@linxin666/dsh-web-ui-all`，其中的 `dsh-tool-describe-image` 发送钩子可能会在 Vision Router 拿到原始 image block 之前，先把图片改写成 `describe-image` 引用。
+
+`dsh-web-ui` 现在已经提供显式兼容开关：进入 **设置 → 插件配置 → 图像理解**，关闭「**发送时改写图片为 describe-image 引用**」，或配置 `interceptImageSend: false`。关闭后，带图发送会原样放行，`dsh-vision-router` 就能继续收到原始 image block。该开关每次发送都会动态读取，因此无需重装/卸载 hook，也不需要重启 DSH。
+
+上游兼容改动见 [dsh-web-ui#301](https://github.com/zhu1090093659/dsh-web-ui/issues/301)。
+
 ### 启动报错 `Unexpected token ... is not valid JSON`（UTF-8 BOM）
 
 **现象**：`dsh web` / `pnpm dsh web` 启动时直接退出：
