@@ -1,0 +1,140 @@
+name: Temporary repository cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/_temp-repo-cleanup.yml
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete stale branches and disable obsolete workflows
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const repository = `${owner}/${repo}`;
+            const alwaysKeep = new Set([
+              'main',
+              'star-history',
+              // Active experiments without a PR that are still potentially useful.
+              'feat/collapse-ollama-settings',
+              'feat/v2-benchmark-scene-router-test',
+            ]);
+            const explicitlyObsolete = new Set([
+              'agent/advisory-vision-capabilities',
+              'docs/short-v130-announcement',
+              'feat/pr-98-integration',
+              'feat/two-pass-context',
+              'fix/vision-backend-compatibility',
+              'ui/update-manual-card',
+              'vision-router-merge',
+            ]);
+
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'all',
+              per_page: 100,
+            });
+            const openHeads = new Set(
+              pulls
+                .filter(pr => pr.state === 'open' && pr.head?.repo?.full_name === repository)
+                .map(pr => pr.head.ref)
+            );
+            const closedHeads = new Set(
+              pulls
+                .filter(pr => pr.state === 'closed' && pr.head?.repo?.full_name === repository)
+                .map(pr => pr.head.ref)
+            );
+
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner,
+              repo,
+              protected: false,
+              per_page: 100,
+            });
+
+            const deleted = [];
+            const kept = [];
+            for (const branch of branches) {
+              const name = branch.name;
+              if (branch.protected || alwaysKeep.has(name) || openHeads.has(name)) {
+                kept.push({ name, reason: branch.protected ? 'protected' : openHeads.has(name) ? 'open PR' : 'keep-list' });
+                continue;
+              }
+
+              let shouldDelete = explicitlyObsolete.has(name) || closedHeads.has(name);
+              let reason = explicitlyObsolete.has(name) ? 'superseded temp branch' : closedHeads.has(name) ? 'closed PR branch' : '';
+
+              if (!shouldDelete) {
+                try {
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner,
+                    repo,
+                    base: 'main',
+                    head: name,
+                  });
+                  if (comparison.data.ahead_by === 0) {
+                    shouldDelete = true;
+                    reason = 'fully contained in main';
+                  }
+                } catch (error) {
+                  core.warning(`Could not compare ${name}: ${error.message}`);
+                }
+              }
+
+              if (!shouldDelete) {
+                kept.push({ name, reason: 'unmerged/no closed PR' });
+                continue;
+              }
+
+              try {
+                await github.rest.git.deleteRef({ owner, repo, ref: `heads/${name}` });
+                deleted.push({ name, reason });
+                core.info(`Deleted branch ${name} (${reason})`);
+              } catch (error) {
+                core.warning(`Failed to delete ${name}: ${error.message}`);
+              }
+            }
+
+            const coreWorkflowPaths = new Set([
+              '.github/workflows/ci.yml',
+              '.github/workflows/release.yml',
+              '.github/workflows/star-history.yml',
+              '.github/workflows/_temp-repo-cleanup.yml',
+            ]);
+            const workflows = await github.paginate(github.rest.actions.listRepoWorkflows, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+            const disabled = [];
+            for (const workflow of workflows) {
+              if (coreWorkflowPaths.has(workflow.path) || workflow.state !== 'active') continue;
+              try {
+                await github.rest.actions.disableWorkflow({ owner, repo, workflow_id: workflow.id });
+                disabled.push(workflow.path);
+                core.info(`Disabled obsolete workflow ${workflow.path}`);
+              } catch (error) {
+                core.warning(`Failed to disable workflow ${workflow.path}: ${error.message}`);
+              }
+            }
+
+            await core.summary
+              .addHeading('Repository cleanup')
+              .addRaw(`Deleted branches: ${deleted.length}\n`)
+              .addRaw(`Disabled obsolete workflows: ${disabled.length}\n`)
+              .addRaw(`Kept branches: ${kept.length}\n`)
+              .write();
+
+            core.setOutput('deleted_branches', JSON.stringify(deleted));
+            core.setOutput('disabled_workflows', JSON.stringify(disabled));
