@@ -40,6 +40,7 @@
 
 - [Why this exists](#why-this-exists)
 - [How it compares](#how-it-compares)
+- [Design lineage](#design-lineage)
 - [Acknowledgements](#acknowledgements)
 - [Quick start](#quick-start)
 - [Free vision key channels](#free-vision-key-channels)
@@ -88,6 +89,14 @@ Most DSH vision plugins bridge images to DeepSeek as *text descriptions* — los
 | [dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) | Ten intent-aware visual tools (Q&A/OCR/pixel verification/UI restoration), called explicitly on demand | Broader tool set; this plugin adds whole-turn auto-routing and a keyless free fallback |
 | [dsh-tool-vision](https://github.com/Scorp1o117/dsh-tool-vision) | An `inspect_image` tool plus an `agent/pre-step` waterfall bridge (pasted images become tool hints before entering the log) | Similar waterfall bridge; this plugin adds turn routing, fallback chains, caching and the free endpoint |
 
+## Design lineage
+
+The deep-vision tool layer and UI-restoration workflow in this project were informed by [Anionex/agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit) and its native DSH implementation [Anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit). In particular, this project drew on their intent-driven tool selection, progressive tool exposure, pixel-diff verification loop, and parts of the visual-tool decomposition and naming, including long-screenshot OCR, foreground extraction, and HTML screenshot tooling.
+
+All code in `dsh-vision-router` is independently implemented. On top of those referenced design ideas, this project independently developed its turn-level/tools-first vision routing, DSH admission/wrapper integration, multi-backend provider and failure fallback chains, built-in free vision chain, attachment/image-memory handling, caching, and related runtime resilience mechanisms.
+
+We appreciate Anionex's prior work and the broader DSH community. Clear attribution and independent iteration can coexist; both help keep the DSH ecosystem open, collaborative, and healthy.
+
 ## Acknowledgements
 
 This project borrows ideas from all of the above — especially the keyless free-endpoint
@@ -127,7 +136,6 @@ If you already installed the DSH CLI globally and `dsh` is on `PATH`, the shorte
 ### 2. Switch to a “+ Auto Vision” model group in chat
 
 Once loaded, the plugin discovers the model groups enabled under **Settings → Models** and creates same-name auto-vision entries. For example:
-
 ```text
 opencode-go                 ← original model group, unchanged
 opencode-go + Auto Vision   ← choose this when sending images
@@ -387,7 +395,6 @@ Oh-DSH Desktop's built-in plugin marketplace (search → prepare → isolated pr
 - id: vision-router
   disabled: true
 ```
-
 Set it back to `false` to re-enable. Unloading removes the wrapper routes, tools, skill and settings card; cached artifact files remain.
 
 ### Upgrade
