@@ -40,6 +40,7 @@
 
 - [为什么做这个](#为什么做这个)
 - [对比同类插件](#对比同类插件)
+- [设计来源](#设计来源)
 - [致谢](#致谢)
 - [快速开始](#快速开始)
 - [免费视觉 Key 渠道](#免费视觉-key-渠道)
@@ -86,6 +87,14 @@
 | [modlens](https://github.com/liustack/modlens) | 最早的 dsh 视觉插件；复用本机 Claude Code/Codex/OpenCode/Pi 等登录态作为视觉引擎 | 引擎复用思路；本插件自带供应商链，不依赖本机其他 CLI |
 | [dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) | 10 个意图化视觉工具（Q&A/OCR/像素校验/UI 还原），按需显式调用 | 工具集更全；本插件多出整轮自动路由与免 Key 免费兜底 |
 | [dsh-tool-vision](https://github.com/Scorp1o117/dsh-tool-vision) | `inspect_image` 工具 + `agent/pre-step` 瀑布图片桥（粘贴图入日志前转成工具提示） | 瀑布桥思路相近；本插件多出轮次路由、降级链、缓存与免费端点 |
+
+## 设计来源
+
+本项目的深度视觉工具层与 UI restoration 工作流参考并受到 [Anionex/agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit) 及其 DSH 原生实现 [Anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) 的设计影响。具体包括意图驱动的工具选择、渐进式工具暴露、pixel-diff 验证闭环，以及部分视觉工具的职责划分与命名，包括长截图 OCR、前景提取和 HTML screenshot 等设计。
+
+`dsh-vision-router` 中相关代码均为独立实现。在这些设计参考基础上，本项目独立发展了 turn-level/tools-first vision routing、DSH 准入/包装集成、多视觉后端与故障 fallback chain、内置免费视觉模型链、附件/图片记忆、缓存与相关运行时容错机制。
+
+感谢 Anionex 的先行工作以及整个 DSH 社区的探索。清晰的设计归因与独立迭代并不冲突；二者都有助于维护开放、协作、健康的 DSH 生态。
 
 ## 致谢
 
