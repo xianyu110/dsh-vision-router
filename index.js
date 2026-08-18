@@ -314,6 +314,11 @@ export const Config = z.object({
   proxy: z.string().default(''),
   proxyHosts: z.array(z.string()).default([...DEFAULT_PROXY_HOSTS]),
   freeFallback: z.boolean().default(true),
+  // 云端免费优先：开启后，云端后端先尝试内置 OVH 免费模型（免注册、免
+  // API Key），付费 httpProviders 仅在免费模型全部失败后作为兜底，尽量把
+  // 云端识别成本降到零。默认关闭 = 保持既有顺序（用户配置在前、内置免费
+  // 补全在后），关闭时行为与 current main 逐字节一致。
+  freeCloudFirst: z.boolean().default(false),
   // Automatically mirror every currently registered provider as an
   // image-capable twin. The source registry is live (ctx.llm.listProviders),
   // so providers added later through Settings are picked up by the existing
@@ -1952,6 +1957,41 @@ export function httpProvidersOf(config, allowDefault = true) {
 }
 
 /**
+ * `freeCloudFirst` ordering: built-in keyless OVH free models first, paid
+ * `httpProviders` only as fallback. Pure reordering of `httpProvidersOf` —
+ * the function itself keeps main's shape (zero-regression gate), and with the
+ * switch off this returns its output byte-identically. The free set is ordered
+ * by the built-in table (largest -> smallest, quality first) so the ordering
+ * is stable and reproducible for the cache key.
+ *
+ * The free tier and the configured tier are built independently, then deduped
+ * by identity of (endpoint/baseURL + model + credential): a configured row can
+ * never shadow a built-in free model — a keyed `ovh/Qwen3.5-397B-A17B` row
+ * keeps the keyless built-in entry first and rides behind it as a paid
+ * fallback, while a keyless manual OVH row (same identity) collapses into the
+ * free tier instead of splitting it.
+ */
+export function orderedHttpProviders(config = {}, freeFirst = false) {
+  const providers = httpProvidersOf(config, config.freeFallback !== false)
+  if (!freeFirst) return providers
+  const identity = (p) =>
+    `${String(p.baseURL ?? '').replace(/\/$/, '')}\u0000${p.model}\u0000${p.apiKeyEnv ?? ''}`
+  const builtinIds = new Set(DEFAULT_HTTP_PROVIDERS.map(identity))
+  const builtinOrder = DEFAULT_HTTP_PROVIDERS.map((p) => `${p.name}/${p.model}`)
+  const byBuiltinOrder = (a, b) => {
+    const ia = builtinOrder.indexOf(`${a.name}/${a.model}`)
+    const ib = builtinOrder.indexOf(`${b.name}/${b.model}`)
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib)
+  }
+  const free = providers.filter((p) => builtinIds.has(identity(p))).sort(byBuiltinOrder)
+  const rest = providers.filter((p) => !builtinIds.has(identity(p)))
+  if (config.freeFallback === false) return [...free, ...rest]
+  // Default: the complete built-in keyless tier leads, then every configured
+  // row whose identity (endpoint + model + credential) is not already covered.
+  return [...DEFAULT_HTTP_PROVIDERS, ...rest]
+}
+
+/**
  * Drop http providers already covered by a `vision-http` pair, so the free
  * endpoint (2 req/min) is never asked twice for the same image.
  */
@@ -2839,7 +2879,7 @@ export function apply(ctx, config = {}) {
     (Number.isFinite(config.cacheTtlSeconds) ? config.cacheTtlSeconds : 3600) * 1000,
   )
   const httpProviders = () => {
-    const raw = httpProvidersOf(current(), current().freeFallback !== false)
+    const raw = orderedHttpProviders(current(), current().freeCloudFirst === true)
     return dedupeHttpProviders(
       pairs().filter((pair) => pair && pair.provider !== 'vision-http'),
       raw,
@@ -3104,7 +3144,7 @@ export function apply(ctx, config = {}) {
   // the vision_describe tool fallback, so the free endpoint is never asked
   // twice for the same image.)
   const httpRouteProviders = () =>
-    httpProvidersOf(current(), current().freeFallback !== false)
+    orderedHttpProviders(current(), current().freeCloudFirst === true)
   // Settings are injected after apply() and can change while DSH stays alive.
   // Build entries per operation so enabling/disabling a local backend or
   // changing its URL/model/protocol takes effect on the next request. The
@@ -4753,7 +4793,10 @@ export function apply(ctx, config = {}) {
             text:
               '图片的整体预识别已经完成。接下来我先围绕你的问题做至少 1 次深挖验证：' +
               '根据 evidence / recommended_followups 选择并调用至少 1 个能新增或验证证据的视觉工具，完成前先不回答。' +
-              '不要默认把 OCR 当第二步：仅当确实需要逐字转写或 bootstrap 标出文字不确定时才用 vision_ocr；' +
+              '不要默认把 OCR 当第二步：OCR 是逐字转写，对 1/l、0/O、空格、换行存在系统性混淆，' +
+              '逐字结果往往比结合上下文的语义理解（vision_describe / vision_detect）更不可靠；' +
+              '仅当需要逐字保真且无法靠上下文恢复时才用 vision_ocr（如可执行代码、需精确引用的长文档/合同/表单、表格数字、验证码、无语义锚点的生僻字）。' +
+              '若确实调用 vision_ocr，把它当需要交叉验证的证据，而不是最终事实。' +
               'UI/截图语义验证优先 vision_detect 或聚焦的 vision_describe；局部目标可用 vision_ground。' +
               '结构化模式下若确实调用 vision_ocr 且未显式指定引擎，会自动使用视觉模型 OCR（engine=vision）而不是先接受本地 Tesseract 的非空结果，' +
               '以提高中文/UI 文字准确率。完成至少 1 次后续证据调用后再进入自由 Agent 循环，可继续调用更多工具或作答。',
@@ -6199,7 +6242,12 @@ ctx.logger?.info(
         'as a fallback when vision_describe fails to identify who/what is in a picture ("这是谁" / ' +
         '"这是什么东西" questions are answered by vision_describe, not OCR). If vision_describe returns ' +
         'ok:false with a backend-unavailable code, calling vision_ocr instead will fail the same way — ' +
-        'do not chain these tools as retries of each other.',
+        'do not chain these tools as retries of each other. ' +
+        'ACCURACY: OCR transcribes characters verbatim and is systematically unreliable for confusable ' +
+        'glyphs (1/l, 0/O), spacing and line breaks; prefer vision_describe / vision_detect for semantic ' +
+        'understanding and use OCR only when exact verbatim text is required (executable code, exact ' +
+        'quotation, forms/contracts, table digits, CAPTCHAs). Treat OCR output as evidence to verify, ' +
+        'never as ground truth.',
       parameters: {
         type: 'object',
         properties: {
