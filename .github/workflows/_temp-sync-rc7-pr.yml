@@ -1,15 +1,15 @@
 name: Temporary rc7 PR sync
 
 on:
-  pull_request:
-    branches: [agent/rc7-conformance]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
 
 jobs:
   sync:
-    if: github.event.pull_request.number == 199
+    if: github.event.issue.number == 199 && github.event.comment.body == '/sync-rc7'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
