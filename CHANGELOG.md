@@ -3,6 +3,56 @@
 每个版本的中英双语发布说明（GitHub Release 工作流从这里取对应版本的段落，发布前必须先写好本节）｜
 Bilingual (Chinese + English) release notes for every version — the GitHub Release workflow pulls the matching section from this file, so it must be filled in before tagging.
 
+## v1.6.0
+
+> **v1.5.3 → v1.6.0**：视觉后端显式授权（P0）——仅在 DSH Settings→Models 里配置过的付费视觉模型不再被隐式调用，视觉工具只允许调用 Vision Router 中明确选择的 provider/model；「DeepSeek + 自动识图」身份钉死官方 DeepSeek。同时带来 macOS 路径与全页截图修复、rc.7 Models 目录恢复、安装诊断归属修正、设置引导滚动性能、Android/Termux 附件兼容，并消除每个用户安装时都会出现的 pnpm peer 依赖告警。
+> **v1.5.3 → v1.6.0**: explicit vision-backend authorization (P0) — paid visual models merely configured under DSH Settings→Models are no longer callable implicitly; vision tools may only call exact provider/model pairs selected in Vision Router, and the DeepSeek + 自动识图 identity is pinned to official DeepSeek. Plus macOS path and full-page screenshot fixes, rc.7 Models-directory recovery, corrected install diagnostics, settings-guide scroll performance, Android/Termux attachment compatibility, and removal of the pnpm peer-dependency warning shown on every user install.
+
+### 授权与安全 / Authorization & security
+
+- **视觉后端显式授权（P0，#191）**：此前 `vision_describe` 的兜底链会自动发现并调用整个 DSH 注册表里声明图像能力的模型——只要在 DSH Settings→Models 配置过某个付费 provider（如 Kimi/小米），即使从未在 Vision Router 中选择它，视觉工具也可能拿它发起调用。现在工具执行期间宿主级模型发现被屏蔽（`listProviders` 返回空），流层做硬门控：未授权的 adapter 后端调用直接以 `NO_ADAPTER` 拒绝（且不会落入 direct-HTTP bridge 绕过路径）；每次工具调用冻结一份允许列表快照；插件自有的 HTTP/OVH 内置链与显式启用的本地视觉后端不受影响。回归测试复现了宿主目录含 Kimi/小米 的场景并断言零未授权调用。
+- **Explicit vision-backend authorization (P0, #191)**: the `vision_describe` fallback walk used to auto-discover and call every image-capable model in the DSH registry — configuring a paid provider (Kimi/Xiaomi, etc.) under DSH Settings→Models made it callable even if never selected in Vision Router. Host-wide discovery is now hidden during tool execution (`listProviders` returns empty), and the stream layer hard-gates: unauthorized adapter-backed calls are refused as `NO_ADAPTER` (and cannot slip through the direct-HTTP bridge). The allowlist snapshot is frozen per tool call; the plugin-owned HTTP/OVH chain and explicitly enabled local backends are unaffected. Regression tests reproduce a host catalog containing Kimi/Xiaomi and assert zero unauthorized calls.
+
+- **「DeepSeek + 自动识图」身份钉死官方 DeepSeek（#191）**：主 wrapper 的模型元数据、委托调用、retryPolicy 与 Settings→Models 目录别名全部指向官方/native DeepSeek，`textProvider` 配置不再能静默改变这个 DeepSeek 标签行的真实后端；第三方 provider 只能通过各自的 `<provider>-vision` twin 或显式视觉后端选择进入。全轮路由模式下配置驱动的 `provider/model（视觉）` 复合选择器条目已恢复（#192）。
+- **DeepSeek + 自动识图 identity pinned to official DeepSeek (#191)**: the main wrapper's model metadata, delegate dispatch, retry policy and Settings→Models directory alias all point at official/native DeepSeek; a stale `textProvider` can no longer silently reroute the DeepSeek-labelled row to Kimi/OpenRouter. Third-party providers remain available through their own `<provider>-vision` twins or explicit vision-backend selection. The config-driven `provider/model（视觉）` composite picker rows in whole-turn routing mode are restored (#192).
+
+- **对抗性运行时边界（#184 / #187）**：HTML 截图强制 Chrome 沙箱 + 离线模式 + 本地资源请求拦截，截图产物限制在工作区内，截图权限接口加同源守卫，进程级 fetch patch 与后续插件可组合。#187 修复了 macOS `/var`→`/private/var` 软链下的路径包含误判（本地资源被误拒），恢复全页截图的滚动唤醒（首屏以下懒加载/滚动触发内容不再静默缺失），并让空页面的高度测量把 `innerHeight` 计入，不再误报超限。
+- **Adversarial runtime boundaries (#184 / #187)**: HTML screenshots enforce the Chrome sandbox, offline mode and local-request interception; artifacts stay inside the workspace; the screenshot-permission endpoint gains a same-origin guard; the process-wide fetch patch composes with later plugins. #187 fixes the macOS `/var`→`/private/var` symlink containment false-negative (local assets were wrongly rejected), restores the full-page scroll wake (below-the-fold lazy/scroll-triggered content is no longer silently missing), and includes `innerHeight` so empty pages are not misreported as over the pixel limit.
+
+### 稳定性与性能 / Stability & performance
+
+- **设置引导滚动门控（#174）**：引导层的解析结果缓存 + 250ms 限频 + 600ms 保活兜底，滚动帧只做一次小元素 rect 读取与样式写入，不再每帧 querySelectorAll 强制布局；回归测试断言滚动帧零 DOM 查询、刷新次数有界。
+- **Settings-guide scroll gate (#174)**: cached walkthrough resolution with a 250ms throttle and a 600ms keep-alive; scroll frames now only read one small element's rect and write spotlight/prompt styles instead of per-frame querySelectorAll forced layout. Regression tests assert zero DOM queries per scroll frame and bounded refreshes.
+
+- **Models-directory 别名生命周期（#189 / #192）**：rc.7 可配置 provider 目录的注册清理现在挂在插件自身 fiber 上——插件 reload 后旧目录行被正确回收、新实例正常重发布，不再出现「目录行被误判为外部所有而永久冻结」；撤回路径记录空集状态键避免多余 replace，重复告警去重。
+- **Models-directory alias lifecycle (#189 / #192)**: the rc.7 configurable-provider registration is now disposed with the plugin's own fiber — a reload withdraws the old row and re-publishes cleanly instead of freezing on a stale row misread as externally owned; the withdrawal path records the empty-state key to avoid redundant replaces, and identical warnings are deduplicated.
+
+- **逐会话推理强度记忆上限（#190）**：按 sessionId 键控的 reasoning-effort 记忆加上限（512 条，FIFO 淘汰 + 读取刷新热度），长驻进程不再无界增长。
+- **Bounded per-session reasoning-effort memory (#190)**: the sessionId-keyed reasoning-effort memory is capped (512 entries, FIFO eviction with read-refreshed recency), so long-running processes cannot grow it without bound.
+
+### 诊断 / Diagnostics
+
+- **profile 级 pnpm 失败归属修正（#186 / #188）**：新增 profile 级安装失败诊断（识别 profile 中其他已装插件的 build 阻断）；修正归属逻辑——`Ignored build scripts` 里只有已声明的 profile 依赖（或已知共存视觉插件）才被当作可移除 blocker，Vision Router 自身的传递依赖（sharp）不再被误判为「别人的插件」并给出有害的 `remove sharp` 建议，而是指向 `pnpm approve-builds`/`onlyBuiltDependencies`；裸名忽略列表与 scoped 包均能解析，失败行匹配改用词边界。
+- **Corrected profile-level pnpm failure attribution (#186 / #188)**: new profile-level install-failure diagnostics that surface build blockers from other installed profile plugins; attribution now only treats declared profile dependencies (or known coexisting vision plugins) as removable blockers — Vision Router's own transitive dependencies (sharp) are no longer misattributed with a harmful `remove sharp` suggestion and instead point at `pnpm approve-builds`/`onlyBuiltDependencies`; bare-name ignore lists and scoped packages parse correctly, and failure-line matching uses word boundaries.
+
+### 平台 / Platform
+
+- **DSH rc.7 Models 目录行恢复（#185）**：deepseek-vision 以官方 DeepSeek 的派生别名发布进 rc.7 的 configurable-provider 目录，重装后 Settings→Models 恢复「DeepSeek + 自动识图」分组行；旧运行时特性检测自动降级。
+- **DSH rc.7 Models-directory row restored (#185)**: deepseek-vision is published into rc.7's configurable-provider directory as a derived alias of official DeepSeek, restoring the Settings→Models group row after reinstall; older runtimes feature-detect and no-op.
+
+- **Android/Termux 附件兼容（#193）**：Termux 下附件本地存储的持久化目录遍历会因 `/data/data` 权限被拒而失败；新增 Android 专属兜底——仅当宿主 `saveImage()` 因嵌套 `EACCES`/`EPERM` 失败时，回退到进程内有界的临时引用并配私有 `readImage()` 包装，宿主附件服务与非 Android 运行时语义完全不变。
+- **Android/Termux attachment compatibility (#193)**: the attachment-local durability walk fails on Termux because `/data/data` cannot be opened; a new Android-only fallback activates only when the host `saveImage()` fails with nested `EACCES`/`EPERM`, using a bounded process-local reference plus a private `readImage()` wrapper — host attachment semantics and non-Android runtimes are unchanged.
+
+### 安装体验 / Install experience
+
+- **消除每次安装的 pnpm peer 依赖告警**：`@deepseek-ai/dsh-anonymous-user-id`、`@deepseek-ai/dsh-llm-deepseek`（由 DSH 宿主模块图解析）与 `sharp`（缺省回退宿主实例）三个 peer 声明为 optional——profile 级 pnpm 看不到宿主包，之前每个用户安装都会打出 `Issues with peer dependencies found` 警告。optional 后安装静默，运行时的「优先宿主实例」语义完全不变。
+- **No more pnpm peer-dependency warning on every install**: the three peers — `@deepseek-ai/dsh-anonymous-user-id` and `@deepseek-ai/dsh-llm-deepseek` (resolved through the DSH host's own module graph) and `sharp` (host-instance fallback) — are now marked optional. Profile-level pnpm cannot see host packages, so the mandatory peers printed `Issues with peer dependencies found` on every user install; optional peers silence it while the prefer-host runtime semantics stay exactly the same.
+
+### 验证 / Validation
+
+- 全量套件 **424 tests pass**（本批新增 56 个回归测试），Node 22 与 Node 24 均通过。发布由 tag 触发的 immutable Release workflow 再次执行完整验证，并经 npm Trusted Publishing（OIDC）发布。
+- Full suite passes **424 tests** (56 new regression tests in this batch) on Node 22 and Node 24. The immutable tag-based Release workflow re-runs full verification and publishes through npm Trusted Publishing (OIDC).
+
 ## v1.5.3
 
 > **v1.5.2 → v1.5.3**：修复 DSH 0.1.0-rc.6 上 update-check / self-update / model-capabilities 三个 host 路由缺失、视觉后端退化循环输出被当作成功结果、以及设置页与图片提醒中让用户误以为模型不可用的文案；新增逐后端视觉调用诊断日志与视觉后端链保存规范化。
