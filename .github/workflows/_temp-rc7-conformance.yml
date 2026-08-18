@@ -1,9 +1,6 @@
 name: Apply rc7 conformance patch
 
 on:
-  push:
-    branches: [main]
-    paths: [.github/workflows/_temp-rc7-conformance.yml]
   pull_request:
     branches: [main]
 
@@ -12,7 +9,7 @@ permissions:
 
 jobs:
   patch:
-    if: github.event_name == 'push' || github.head_ref == 'agent/rc7-conformance'
+    if: github.head_ref == 'agent/rc7-conformance'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,19 +20,8 @@ jobs:
         with:
           node-version: 22.20.0
       - run: corepack enable
-      - name: Execute staged patch script
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          workflow = Path('.github/workflows/rc7-conformance-patch.yml').read_text()
-          start_marker = "          from pathlib import Path\n"
-          end_marker = "\n          PY\n"
-          start = workflow.index(start_marker)
-          end = workflow.index(end_marker, start)
-          raw = workflow[start:end]
-          script = ''.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines(True))
-          exec(compile(script, 'rc7-conformance-patch.py', 'exec'), {'__name__': '__main__'})
-          PY
+      - name: Apply compatibility patch
+        run: python scripts/_rc7_patch.py
       - name: Install dependencies
         run: pnpm install --frozen-lockfile=false
       - name: Run full test suite
