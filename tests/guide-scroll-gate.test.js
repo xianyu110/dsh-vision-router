@@ -2,11 +2,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const GUIDE_STORAGE_KEY = 'dsh-vision-router:guide:vision-backend-v2'
-
 function loadClientBundle() {
   let spec = null
-  globalThis.window = { __ModuleLoader__: { load(s) { spec = s } } }
+  globalThis.window = {
+    __ModuleLoader__: {
+      load(s) {
+        spec = s
+      },
+    },
+  }
   const url = new URL('../lib/client.js', import.meta.url)
   // eslint-disable-next-line no-eval
   ;(0, eval)(readFileSync(url, 'utf8'))
@@ -17,27 +21,22 @@ function loadClientBundle() {
   }
   return spec.factory((name) => {
     if (name === 'react') return ReactStub
-    if (name === '@deepseek-ai/dsh-client-ui-attachment') {
-      return { ImageGallery: () => null }
-    }
+    if (name === '@deepseek-ai/dsh-client-ui-attachment') return { ImageGallery: () => null }
     throw new Error('require(' + name + ')')
   })
 }
 
-function makeFakeElement(tag = 'div') {
+function fakeElement() {
   return {
-    tag,
-    type: '',
     className: '',
     dataset: {},
-    textContent: '',
+    children: [],
     offsetWidth: 360,
     offsetHeight: 160,
-    children: [],
+    isConnected: true,
     style: {
       removeProperty() {},
       setProperty() {},
-      remove() {},
     },
     classList: {
       add() {},
@@ -46,228 +45,208 @@ function makeFakeElement(tag = 'div') {
     },
     setAttribute() {},
     addEventListener() {},
-    removeAttribute() {},
-    append(...children) { this.children.push(...children) },
     remove() {},
+    append(...items) {
+      this.children.push(...items)
+    },
     querySelector(selector) {
-      const match = selector.match(/^\.([\w-]+)$/)
-      if (match) return this.children.find((child) => child.className.split(/\s+/).includes(match[1])) ?? null
-      if (selector === 'nav') return null
-      return null
+      const cls = selector.match(/^\.([\w-]+)$/)
+      return cls
+        ? this.children.find((child) => String(child.className).split(/\s+/).includes(cls[1])) ?? null
+        : null
     },
     getBoundingClientRect() {
       return { x: 100, y: 100, width: 120, height: 40, left: 100, right: 220, top: 100, bottom: 140 }
     },
-    getAttribute() { return null },
-    isConnected: true,
+    getAttribute() {
+      return null
+    },
+    closest() {
+      return null
+    },
   }
 }
 
-function makeGuideHarness({ guideStep } = {}) {
-  const counters = { domQueries: 0, rectReads: 0, scrollEvents: 0, frames: 0 }
-  const listeners = {}
+function harness() {
+  const counters = { queries: 0, rects: 0 }
+  const listeners = new Map()
   const frames = []
-  const timers = []
-  let intervalCounter = 0
-  let timeoutCounter = 0
+  let mutationCallback
 
-  const panel = {
-    ...makeFakeElement('div'),
-    closest: () => null,
-    getBoundingClientRect() {
-      counters.rectReads += 1
-      return { x: 0, y: 0, width: 800, height: 600, left: 0, right: 800, top: 0, bottom: 600 }
-    },
+  const target = fakeElement()
+  target.getBoundingClientRect = () => {
+    counters.rects += 1
+    return { x: 100, y: 100, width: 120, height: 40, left: 100, right: 220, top: 100, bottom: 140 }
   }
-  const gear = {
-    ...makeFakeElement('button'),
-    closest: () => null,
-    getBoundingClientRect() {
-      counters.rectReads += 1
-      return { x: 10, y: 10, width: 40, height: 40, left: 10, right: 50, top: 10, bottom: 50 }
-    },
-  }
-  const composerTarget = {
-    ...makeFakeElement('button'),
-    closest: () => null,
-    getBoundingClientRect() {
-      counters.rectReads += 1
-      return { x: 100, y: 100, width: 120, height: 40, left: 100, right: 220, top: 100, bottom: 140 }
-    },
-  }
+  const gear = fakeElement()
+  const panel = fakeElement()
+  panel.querySelector = () => null
 
-  const documentStub = {
+  const document = {
     body: { appendChild() {} },
-    addEventListener(type, callback) { listeners[type] = callback },
-    removeEventListener(type) { delete listeners[type] },
+    documentElement: {},
+    activeElement: null,
+    addEventListener(type, fn) {
+      listeners.set('document:' + type, fn)
+    },
+    removeEventListener(type) {
+      listeners.delete('document:' + type)
+    },
     dispatchEvent() {},
+    createElement() {
+      return fakeElement()
+    },
     querySelectorAll(selector) {
-      counters.domQueries += 1
-      if (selector === '[role="dialog"][aria-modal="true"]') return [panel]
+      counters.queries += 1
+      if (selector.includes('conversation.input.model')) return [target]
       if (selector === 'button[aria-haspopup="dialog"]') return [gear]
-      if (selector.includes('[data-slot="conversation.input.model"]')) return [composerTarget]
+      if (selector === '[role="dialog"][aria-modal="true"]') return [panel]
       return []
     },
-    querySelector(selector) {
-      counters.domQueries += 1
+    querySelector() {
+      counters.queries += 1
       return null
     },
-    createElement(tag) { return makeFakeElement(tag) },
   }
 
-  const windowStub = {
+  class FakeMutationObserver {
+    constructor(callback) {
+      mutationCallback = callback
+    }
+    observe() {}
+    disconnect() {
+      mutationCallback = undefined
+    }
+  }
+
+  const window = {
     innerWidth: 1280,
     innerHeight: 800,
+    MutationObserver: FakeMutationObserver,
+    addEventListener(type, fn) {
+      listeners.set('window:' + type, fn)
+    },
+    removeEventListener(type) {
+      listeners.delete('window:' + type)
+    },
+    dispatchEvent() {},
+    requestAnimationFrame(fn) {
+      frames.push(fn)
+      return frames.length
+    },
+    cancelAnimationFrame() {},
+    setTimeout(fn) {
+      frames.push(fn)
+      return frames.length
+    },
+    clearTimeout() {},
     localStorage: {
-      getItem: (key) => (key === GUIDE_STORAGE_KEY ? guideStep ?? null : null),
+      getItem() {
+        return null
+      },
       setItem() {},
       removeItem() {},
     },
-    addEventListener(type, callback) { listeners['window:' + type] = callback },
-    removeEventListener() {},
-    dispatchEvent() {},
-    requestAnimationFrame(callback) {
-      frames.push(callback)
-      return frames.length
-    },
-    setTimeout(callback, delay) {
-      const id = ++timeoutCounter
-      timers.push({ id, kind: 'timeout', callback, delay })
-      return id
-    },
-    clearTimeout() {},
-    setInterval(callback, delay) {
-      const id = ++intervalCounter
-      timers.push({ id, kind: 'interval', callback, delay })
-      return id
-    },
-    clearInterval() {},
   }
 
   return {
     counters,
-    get document() { return documentStub },
-    get window() { return windowStub },
-    runScrollEvent() {
-      counters.scrollEvents += 1
-      listeners['scroll'] && listeners['scroll']()
+    document,
+    window,
+    listeners,
+    scroll() {
+      const fn = listeners.get('document:scroll')
+      if (fn) fn()
     },
-    runFrame() {
-      counters.frames += 1
-      const pending = frames.splice(0)
-      for (const callback of pending) callback()
+    mutate() {
+      if (typeof mutationCallback === 'function') mutationCallback([])
     },
-    runIntervals() {
-      for (const timer of timers) {
-        if (timer.kind === 'interval') timer.callback()
-      }
-    },
-    disposeListeners() {
-      delete listeners['scroll']
+    frame() {
+      const work = frames.splice(0)
+      for (const fn of work) fn()
     },
   }
 }
 
-function bootBundle(harness, guideStep) {
-  const realNow = Date.now
-  let fakeNow = 0
-  Date.now = () => fakeNow
-  // Load the bundle first: the eval only needs window.__ModuleLoader__.
-  // Afterwards the bundle code reads the real test window/document globals.
+function boot() {
+  const h = harness()
   const bundle = loadClientBundle()
-  globalThis.document = harness.document
-  globalThis.window = harness.window
+  globalThis.document = h.document
+  globalThis.window = h.window
   const dispose = bundle.installVisionSettingsGuide((key) => key)
-  return {
-    bundle,
-    dispose,
-    setNow(value) { fakeNow = value },
-    restore() {
-      Date.now = realNow
-    },
-  }
+  return { h, bundle, dispose }
 }
 
-test('active walkthrough scroll frames never re-run DOM queries (only re-anchor)', () => {
-  const harness = makeGuideHarness({ guideStep: 'step2' })
-  const session = bootBundle(harness, 'step2')
+test('idle guide runtime installs zero global hot-path listeners and does zero DOM work', () => {
+  const { h, dispose } = boot()
   try {
-    // Install-time sync resolves once (panel + target queries). From now on,
-    // scroll frames must NOT add a single DOM query: only one target rect
-    // read plus style writes per frame.
-    const queriesAfterInstall = harness.counters.domQueries
-    assert.ok(queriesAfterInstall > 0, 'install-time resolution must query the DOM')
-    for (let i = 0; i < 30; i++) {
-      harness.runScrollEvent()
-      harness.runFrame()
+    assert.equal(h.listeners.has('document:scroll'), false)
+    assert.equal(h.listeners.has('window:resize'), false)
+    assert.equal(h.counters.queries, 0)
+    for (let i = 0; i < 20; i += 1) {
+      h.scroll()
+      h.frame()
     }
-    assert.equal(
-      harness.counters.domQueries,
-      queriesAfterInstall,
-      'scroll frames must not re-run querySelectorAll/querySelector',
-    )
-    assert.ok(harness.counters.rectReads > 0, 'frames must still re-anchor the target')
-
-    // After the throttle window the resolution refreshes once (fresh DOM
-    // query), then stays bounded again.
-    const beforeRefresh = harness.counters.domQueries
-    session.setNow(400)
-    harness.runScrollEvent()
-    harness.runFrame()
-    const refreshed = harness.counters.domQueries - beforeRefresh
-    assert.ok(refreshed >= 1, 'a stale resolution must refresh after the throttle window')
-    assert.ok(refreshed <= 6, `refresh must be bounded (got ${refreshed})`)
-
-    for (let i = 0; i < 10; i++) {
-      harness.runScrollEvent()
-      harness.runFrame()
-    }
-    assert.ok(
-      harness.counters.domQueries <= beforeRefresh + refreshed + 1,
-      'frames after the refresh must not keep re-resolving',
-    )
+    assert.equal(h.counters.queries, 0)
   } finally {
-    session.restore()
-    harness.disposeListeners()
-    session.dispose()
+    dispose()
   }
 })
 
-test('idle (no walkthrough) scroll events perform zero DOM queries', () => {
-  const harness = makeGuideHarness({ guideStep: null })
-  const session = bootBundle(harness, null)
+test('active guide installs listeners lazily and keeps scroll-frame resolution bounded', () => {
+  const { h, bundle, dispose } = boot()
+  const realNow = Date.now
+  Date.now = () => 0
   try {
-    const queriesAfterInstall = harness.counters.domQueries
-    assert.equal(queriesAfterInstall, 0, 'idle install must not query the DOM')
-    for (let i = 0; i < 30; i++) {
-      harness.runScrollEvent()
-      harness.runFrame()
+    bundle.startVisionSettingsGuide((key) => key)
+    assert.equal(h.listeners.has('document:scroll'), true)
+    const afterStart = h.counters.queries
+    assert.ok(afterStart > 0)
+    for (let i = 0; i < 30; i += 1) {
+      h.scroll()
+      h.frame()
     }
-    assert.equal(harness.counters.domQueries, 0, 'idle scroll frames must stay DOM-free')
+    assert.equal(h.counters.queries, afterStart, 'cached active frames must not re-query DOM')
+    assert.ok(h.counters.rects > 0)
   } finally {
-    session.restore()
-    harness.disposeListeners()
-    session.dispose()
+    Date.now = realNow
+    bundle.finishVisionSettingsGuide()
+    dispose()
   }
 })
 
-test('step1 selector walkthrough keeps per-frame queries bounded', () => {
-  const harness = makeGuideHarness({ guideStep: 'step1' })
-  const session = bootBundle(harness, 'step1')
+test('structural DOM mutations invalidate cached guide target resolution immediately', () => {
+  const { h, bundle, dispose } = boot()
+  const realNow = Date.now
+  Date.now = () => 1000
   try {
-    const queriesAfterInstall = harness.counters.domQueries
-    for (let i = 0; i < 30; i++) {
-      harness.runScrollEvent()
-      harness.runFrame()
-    }
-    assert.equal(
-      harness.counters.domQueries,
-      queriesAfterInstall,
-      'step1 scroll frames must not re-resolve selector targets per frame',
-    )
+    bundle.startVisionSettingsGuide((key) => key)
+    h.frame()
+    const beforeMutation = h.counters.queries
+    h.mutate()
+    h.frame()
+    assert.ok(h.counters.queries > beforeMutation, 'structural mutation must bypass the target cache')
   } finally {
-    session.restore()
-    harness.disposeListeners()
-    session.dispose()
+    Date.now = realNow
+    bundle.finishVisionSettingsGuide()
+    dispose()
+  }
+})
+
+test('ending a guide disposes global listeners so later scrolls stay inert', () => {
+  const { h, bundle, dispose } = boot()
+  try {
+    bundle.startVisionSettingsGuide((key) => key)
+    assert.equal(h.listeners.has('document:scroll'), true)
+    bundle.finishVisionSettingsGuide()
+    assert.equal(h.listeners.has('document:scroll'), false)
+    const queries = h.counters.queries
+    for (let i = 0; i < 10; i += 1) {
+      h.scroll()
+      h.frame()
+    }
+    assert.equal(h.counters.queries, queries)
+  } finally {
+    dispose()
   }
 })
