@@ -8,16 +8,35 @@ import {
   protectRc7ProviderOwnership,
 } from '../lib/dsh-contract-compat.js'
 
-test('contract detection distinguishes rc6 from rc7 by the configurable-provider directory seam', () => {
-  assert.equal(isRc7ContractRuntime({ llm: {} }), false)
-  assert.equal(isRc7ContractRuntime({ llm: { registerConfigurableProviders() {} } }), true)
+function runtimeWithAttachments(attachments, llm = {}) {
+  return {
+    llm,
+    get(name) {
+      return name === 'attachments' ? attachments : undefined
+    },
+  }
+}
+
+test('contract detection follows the released attachment API, not the pre-rc7 LLM directory', () => {
+  // Official rc.6 already shipped registerConfigurableProviders(); using that
+  // as a version probe would incorrectly route every rc.6 host through rc.7.
+  const rc6 = runtimeWithAttachments(
+    { saveImage() {}, readImage() {}, validateImage() {} },
+    { registerConfigurableProviders() {} },
+  )
+  const rc7 = runtimeWithAttachments(
+    { saveImage() {}, saveImages() {}, readImage() {}, validateImage() {} },
+    { registerConfigurableProviders() {} },
+  )
+  assert.equal(isRc7ContractRuntime(rc6), false)
+  assert.equal(isRc7ContractRuntime(rc7), true)
+  assert.equal(isRc7ContractRuntime({ llm: { registerConfigurableProviders() {} } }), false)
 })
 
 test('rc7 provider ownership blocks only synthetic official routes', () => {
   const registered = []
   const ctx = {
     llm: {
-      registerConfigurableProviders() {},
       registerAdapter(routes, adapter) {
         registered.push({ routes, adapter })
         return () => {}
@@ -90,8 +109,8 @@ test('rc7 settings bridge uses the common public SettingsProvider seam and masks
 })
 
 test('attachment compatibility remains rc6-only and rc7 keeps host-owned refs', () => {
-  const rc6 = { llm: {} }
-  const rc7 = { llm: { registerConfigurableProviders() {} } }
+  const rc6 = runtimeWithAttachments({ saveImage() {}, readImage() {}, validateImage() {} })
+  const rc7 = runtimeWithAttachments({ saveImage() {}, saveImages() {}, readImage() {}, validateImage() {} })
   let installs = 0
   const installAndroidAttachmentCompat = (ctx) => {
     installs += 1
@@ -102,6 +121,16 @@ test('attachment compatibility remains rc6-only and rc7 keeps host-owned refs', 
   assert.equal(wrappedRc6.compat, true)
   assert.equal(wrappedRc7, rc7)
   assert.equal(installs, 1)
+})
+
+test('settings card registration is a structural superset of rc6 list and rc7 keyed slots', async () => {
+  const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const block = source.match(/name: 'settings\.plugin\.item',[\s\S]{0,260}VisionRouterCardMemoized/)
+  assert.ok(block, 'settings.plugin.item registration must exist')
+  assert.match(block[0], /key: 'vision-router'/)
+  assert.match(block[0], /id: 'vision-router'/)
+  // rc.7 only requires key; rc.6 only requires id. The slot runtime ignores
+  // the non-applicable extra metadata rather than rejecting it.
 })
 
 test('manifest keeps the rc6 host peers and does not add an rc7-only package edge', async () => {
