@@ -12,6 +12,7 @@
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
   <a href="https://github.com/zp-home/dsh-recommend"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzp-home%2Fdsh-recommend%2Fmain%2Fdata%2Fbadges%2Fysr666__dsh-vision-router.certified.json&amp;style=flat-square" alt="dsh-recommend 🏅 精选认证" /></a>
   <a href="https://github.com/zp-home/dsh-recommend"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzp-home%2Fdsh-recommend%2Fmain%2Fdata%2Fbadges%2Fysr666__dsh-vision-router.json&amp;style=flat-square" alt="dsh score 0.90" /></a>
+  <a href="https://dshplugin.app/plugins/dsh-vision-router"><img src="https://img.shields.io/badge/DSHPlugin.app-listed-555?style=flat-square" alt="Listed on DSHPlugin.app" /></a>
 </p>
 
 <p align="center">
@@ -117,6 +118,9 @@ For normal npm/npx installs, installation is a single command:
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
 ```
+
+> [!WARNING]
+> If this profile already loads community plugins manually through `cordis.patch.yml`, do **not** mix that legacy setup with `dsh plugin add` / `dsh plugin list`: current DSH CLI behavior can also append bundle-patch dependencies to `dsh.profile.bundles`, causing those plugins to register twice. Migrate the existing manual plugin rows to bundle-managed loading first, or keep using the manual installation path. See [deepseek-harness discussion #2889](https://github.com/deepseek-ai/deepseek-harness/discussions/2889).
 
 > [!NOTE]
 > Third-party `dsh-web-plugin-manager` / `dshpm` **v0.4.2+** is also compatible: its quality gate now correctly allows `@deepseek-ai/schemastery` as a runtime dependency. The official DSH CLI above remains the recommended install path.
@@ -414,6 +418,9 @@ Normal npm/npx install — one command:
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
 ```
+
+> [!NOTE]
+> Profiles that mix legacy manual `cordis.patch.yml` plugin rows with bundle-managed plugins should read the compatibility warning in [Quick start](#1-install-the-plugin) before running DSH plugin commands.
 
 From a DeepSeek Harness source checkout:
 
