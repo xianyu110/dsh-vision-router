@@ -73,6 +73,34 @@ test('renderDepthGuidance: invalid depth falls back to standard copy', () => {
   assert.match(text, /standard/)
 })
 
+test('guidanceOverrides: user copy wins over built-in for scene kinds', () => {
+  const overrides = [{ kind: 'document', text: '重点关注合同条款与签名。' }]
+  const text = renderDepthGuidance({ visualKind: 'document', depth: 'standard', guidanceOverrides: overrides })
+  assert.match(text, /合同条款与签名/)
+  assert.doesNotMatch(text, /语义优先/) // 内置文案被覆盖
+  assert.match(text, /standard/)
+})
+
+test('guidanceOverrides: user copy wins over built-in for content kinds (general)', () => {
+  const overrides = [{ kind: 'food', text: '关注菜品摆盘与食材新鲜度。' }]
+  const text = renderDepthGuidance({ visualKind: 'general', contentKind: 'food', depth: 'standard', guidanceOverrides: overrides })
+  assert.match(text, /摆盘/)
+  assert.doesNotMatch(text, /菜品\/食材\/卖相/)
+})
+
+test('guidanceOverrides: empty/undefined overrides keep built-in behavior', () => {
+  const withEmpty = renderDepthGuidance({ visualKind: 'document', depth: 'standard', guidanceOverrides: [] })
+  const without = renderDepthGuidance({ visualKind: 'document', depth: 'standard' })
+  assert.equal(withEmpty, without)
+  assert.match(withEmpty, /语义优先/)
+})
+
+test('index.js integration: guidanceOverrides wired into Config and followup guidance', () => {
+  const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  assert.equal(index.includes('guidanceOverrides: z'), true)
+  assert.equal(index.includes('guidanceOverrides: current().guidanceOverrides'), true)
+})
+
 test('index.js integration: visionDepth wired into Config, bootstrap state and tool wrapper', () => {
   const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   assert.equal(index.includes("visionDepth: z.union(['fast', 'standard', 'deep']).default('standard')"), true)

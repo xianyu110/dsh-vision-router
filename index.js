@@ -273,6 +273,12 @@ export const Config = z.object({
   // 模型在档位内按用户问题自选工具与轮次（保留 x 的自由度）。默认 standard
   // = 现状行为逐字节不变。与场景路由正交：场景管出口、档位管深度。
   visionDepth: z.union(['fast', 'standard', 'deep']).default('standard'),
+  // 引导文案覆盖（引导表可配置化）：kind = visual_kind（code/document/ui/chat）
+  // 或 content_kind（person/animal/…/meme），text = 覆盖引导文案。
+  // 默认空 = 用内置引导表（零变化）；配置后该 kind 的引导优先用覆盖文案。
+  guidanceOverrides: z
+    .array(z.object({ kind: z.string(), text: z.string() }))
+    .default([]),
   progressiveTools: z.boolean().default(true),
   autoActivateOnImage: z.boolean().default(true),
   // Desktop capture crosses a separate privacy boundary from inspecting user-
@@ -4810,12 +4816,14 @@ export function apply(ctx, config = {}) {
       // 引导，避免模型漏判/错判另一半内容；非 mixed / 细分失败时无分支引导。
       const mixedGuidanceText = renderMixedGuidance(bootstrapState && bootstrapState.mixedPlan)
       // 场景/内容/档位引导：mixed 用分支引导 + 档位句；非 mixed 用场景引导 + 档位句
-      // （场景引导按 visual_kind 查表；general 用 content_kind 内容引导——bootstrap 判出）。
+      // （场景引导按 visual_kind 查表；general 用 content_kind 内容引导——bootstrap 判出；
+      //   guidanceOverrides 用户可配置覆盖引导文案）。
       const depthCopy = renderDepthGuidance({ depth: visionDepth() })
       const sceneDepth = renderDepthGuidance({
         visualKind: bootstrapState && bootstrapState.visualKind,
         contentKind: bootstrapState && bootstrapState.contentKind,
         depth: visionDepth(),
+        guidanceOverrides: current().guidanceOverrides,
       })
       const guidanceBlock = mixedGuidanceText ? `${mixedGuidanceText}${depthCopy}` : sceneDepth
       const followupBase =
