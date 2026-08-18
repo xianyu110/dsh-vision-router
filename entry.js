@@ -7,7 +7,6 @@
 // explicit opt-in rather than the implicit fallback.
 
 import z from '@deepseek-ai/schemastery'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as core from './index.js'
 import { installVisionRouterFileLogging } from './lib/file-logger.js'
 import { contextWithDelegatedReplay } from './lib/replay-delegation.js'
@@ -36,8 +35,6 @@ export {
   protectRc7ProviderOwnership,
 } from './lib/dsh-contract-compat.js'
 export const Config = core.Config
-
-const SETTINGS_NS = settingsNamespace('vision-router')
 
 // Defense in depth for direct/programmatic callers that invoke apply() without
 // first running the Cordis Config resolver: only an explicit true enables the
@@ -81,8 +78,7 @@ export function apply(ctx, config = {}) {
   const ownershipCtx = rc7 ? protectRc7ProviderOwnership(stabilizedCtx) : stabilizedCtx
   const settingsCtx = rc7
     ? installRc7SettingsCompatibility(ownershipCtx, { ...runtimeConfig, stealth: false }, {
-        installSettingsSection,
-        namespace: SETTINGS_NS,
+        namespace: 'vision-router',
         Config: core.Config,
       })
     : ownershipCtx
