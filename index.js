@@ -1962,29 +1962,33 @@ export function httpProvidersOf(config, allowDefault = true) {
  * the function itself keeps main's shape (zero-regression gate), and with the
  * switch off this returns its output byte-identically. The free set is ordered
  * by the built-in table (largest -> smallest, quality first) so the ordering
- * is stable and reproducible for the cache key. A user-configured entry that
- * matches a built-in free model (same name/model/baseURL, no apiKeyEnv) is
- * treated as free, so a manual OVH row cannot split the tier.
+ * is stable and reproducible for the cache key.
+ *
+ * The free tier and the configured tier are built independently, then deduped
+ * by identity of (endpoint/baseURL + model + credential): a configured row can
+ * never shadow a built-in free model — a keyed `ovh/Qwen3.5-397B-A17B` row
+ * keeps the keyless built-in entry first and rides behind it as a paid
+ * fallback, while a keyless manual OVH row (same identity) collapses into the
+ * free tier instead of splitting it.
  */
 export function orderedHttpProviders(config = {}, freeFirst = false) {
   const providers = httpProvidersOf(config, config.freeFallback !== false)
   if (!freeFirst) return providers
-  const isBuiltinFree = (p) =>
-    !!p &&
-    DEFAULT_HTTP_PROVIDERS.some(
-      (candidate) =>
-        candidate.name === p.name &&
-        candidate.model === p.model &&
-        candidate.baseURL.replace(/\/$/, '') === String(p.baseURL ?? '').replace(/\/$/, '') &&
-        (p.apiKeyEnv ?? '') === '',
-    )
-  const free = providers.filter(isBuiltinFree).sort((a, b) => {
-    const ia = DEFAULT_HTTP_PROVIDERS.findIndex((c) => c.name === a.name && c.model === a.model)
-    const ib = DEFAULT_HTTP_PROVIDERS.findIndex((c) => c.name === b.name && c.model === b.model)
+  const identity = (p) =>
+    `${String(p.baseURL ?? '').replace(/\/$/, '')}\u0000${p.model}\u0000${p.apiKeyEnv ?? ''}`
+  const builtinIds = new Set(DEFAULT_HTTP_PROVIDERS.map(identity))
+  const builtinOrder = DEFAULT_HTTP_PROVIDERS.map((p) => `${p.name}/${p.model}`)
+  const byBuiltinOrder = (a, b) => {
+    const ia = builtinOrder.indexOf(`${a.name}/${a.model}`)
+    const ib = builtinOrder.indexOf(`${b.name}/${b.model}`)
     return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib)
-  })
-  const rest = providers.filter((p) => !isBuiltinFree(p))
-  return [...free, ...rest]
+  }
+  const free = providers.filter((p) => builtinIds.has(identity(p))).sort(byBuiltinOrder)
+  const rest = providers.filter((p) => !builtinIds.has(identity(p)))
+  if (config.freeFallback === false) return [...free, ...rest]
+  // Default: the complete built-in keyless tier leads, then every configured
+  // row whose identity (endpoint + model + credential) is not already covered.
+  return [...DEFAULT_HTTP_PROVIDERS, ...rest]
 }
 
 /**

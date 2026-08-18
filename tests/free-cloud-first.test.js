@@ -46,22 +46,42 @@ test('freeCloudFirst: ordering is stable for the cache key (same config, same li
   assert.deepEqual(a, b)
 })
 
-test('freeCloudFirst: paid rows with a key are never treated as free', () => {
-  // httpProvidersOf (main semantics) dedupes by name/model: a user-configured
-  // keyed OVH row shadows the built-in keyless entry for that model, so the
-  // free tier keeps only the other four built-in models and the keyed row
-  // rides in the paid tail.
+test('freeCloudFirst: paid rows with a key never shadow the built-in free entry', () => {
+  // The free tier and the configured tier are built independently and deduped
+  // by identity (endpoint/baseURL + model + credential): a keyed OVH row keeps
+  // the built-in keyless entry first (the anonymous free flagship is still
+  // tried) and rides behind it as a paid fallback.
   const paidOvh = [
     { name: 'ovh', baseURL: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1', model: 'Qwen3.5-397B-A17B', apiKeyEnv: 'OVH_KEY' },
   ]
   const ordered = orderedHttpProviders({ httpProviders: paidOvh }, true)
   const ids = ordered.map((p) => `${p.name}/${p.model}`)
   assert.deepEqual(ids, [
+    'ovh/Qwen3.5-397B-A17B',
     'ovh/Qwen2.5-VL-72B-Instruct',
     'ovh/Qwen3.6-27B',
     'ovh/Mistral-Small-3.2-24B-Instruct-2506',
     'ovh/Qwen3.5-9B',
     'ovh/Qwen3.5-397B-A17B',
   ])
-  assert.equal(ordered[4].apiKeyEnv, 'OVH_KEY')
+  assert.equal(ordered[0].apiKeyEnv, '')
+  assert.equal(ordered[5].apiKeyEnv, 'OVH_KEY')
+})
+
+test('freeCloudFirst: keyed row does not suppress the free tier when it matches a built-in model', () => {
+  // Regression guard for the maintainer review: with a keyed OVH row present,
+  // the free tier must stay complete (all five built-in keyless models) and
+  // the keyed row must come after, never instead of, the keyless entry.
+  const paidOvh = [
+    { name: 'ovh', baseURL: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1', model: 'Qwen3.5-397B-A17B', apiKeyEnv: 'OVH_KEY' },
+    { name: 'zhipu', baseURL: 'https://api.zhipu.test/v1', model: 'glm-4.6v', apiKeyEnv: 'ZHIPU_KEY' },
+  ]
+  const ordered = orderedHttpProviders({ httpProviders: paidOvh }, true)
+  const freeBlock = ordered.slice(0, DEFAULT_HTTP_PROVIDERS.length)
+  assert.deepEqual(
+    freeBlock.map((p) => `${p.name}/${p.model}`),
+    DEFAULT_HTTP_PROVIDERS.map((p) => `${p.name}/${p.model}`),
+  )
+  assert.equal(freeBlock.every((p) => p.apiKeyEnv === ''), true)
+  assert.equal(ordered[DEFAULT_HTTP_PROVIDERS.length].apiKeyEnv, 'OVH_KEY')
 })
