@@ -56,7 +56,6 @@
   "peerDependencies": {
     "@deepseek-ai/dsh-anonymous-user-id": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm-deepseek": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
     "sharp": ">=0.35.3 <1"
   },
   "peerDependenciesMeta": {
@@ -64,9 +63,6 @@
       "optional": true
     },
     "@deepseek-ai/dsh-llm-deepseek": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-settings": {
       "optional": true
     },
     "sharp": {
