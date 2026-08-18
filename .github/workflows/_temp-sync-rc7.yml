@@ -1,3 +1,4 @@
+# second push intentionally triggers the one-shot workflow now that it exists on main
 name: Temporary rc7 branch sync
 
 on:
@@ -32,8 +33,6 @@ jobs:
           git fetch origin main
           git merge origin/main --no-commit --no-ff || true
 
-          # #198 and #177 both touch these files. Keep the rc7 side first,
-          # then replay the already-reviewed #177 delta onto index/client.
           for path in index.js lib/client.js package.json; do
             if git diff --name-only --diff-filter=U | grep -Fxq "$path"; then
               git checkout --ours -- "$path"
@@ -48,10 +47,6 @@ jobs:
             exit 1
           fi
 
-          # #177 was merged by 382cdff (first parent 191db28). Reapply only
-          # its index/client delta because those two files were intentionally
-          # resolved to the rc7 side above. package.json was already reconciled
-          # on agent/rc7-conformance in commit 1c13b5d.
           git diff 191db28ac842b93fd335343497b74b504d2854dc 382cdff81325633008984e06dc2aa0e229526ab5 -- index.js lib/client.js | git apply --3way
           git add index.js lib/client.js package.json
 
