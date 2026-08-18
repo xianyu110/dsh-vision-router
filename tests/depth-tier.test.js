@@ -114,12 +114,12 @@ test('index.js integration: visionDepth wired into Config, bootstrap state and t
 test('index.js integration: deep quota consumed only after evidence (mixed x depth fix 2)', () => {
   const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   // Blocking 2 修复：配额不在 execute 前预扣（失败调用不烧档位配额），
-  // 只在工具真正产出证据（result.ok === true）后才递增并标记完成，
-  // 模型因此保有"至少一次证据调用"提醒并可重试。
+  // 只在工具真正产出证据（结果不含 ok:false，对象或 JSON 字符串均兼容）
+  // 后才递增并标记完成，模型因此保有"至少一次证据调用"提醒并可重试。
   assert.equal(index.includes('state.deepCalls = used + 1'), false) // 预扣已移除
   assert.equal(index.includes('state.deepCalls = (state.deepCalls || 0) + 1'), true)
-  assert.equal(index.includes("result && typeof result === 'object' && result.ok === true"), true)
-  assert.equal(index.includes('state.followupCompleted = true'), true) // 仍在，但移到成功分支内
+  assert.equal(index.includes('evidenceFailure'), true) // ok:false 判定（对象或 JSON 字符串）
+  assert.equal(index.includes('state.followupCompleted = true'), true) // 仍在，但移到产出证据分支内
 })
 
 test('client.js integration: visionDepth select rendered in Performance group', () => {

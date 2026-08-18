@@ -34,9 +34,28 @@ test('buildMixedBranches: single branch when no secondary', () => {
   assert.equal(branches[0].kind, 'document')
 })
 
-test('buildMixedBranches: general/unknown never become secondary branches', () => {
-  const branches = buildMixedBranches('ui', ['general', 'unknown'])
-  assert.equal(branches.length, 1)
+test('buildMixedBranches: general is a legal secondary branch (maintainer review)', () => {
+  // mixed_of schema allows document|ui|code|chat|general; a mixed image of
+  // "ui + general" must keep BOTH branches so the unclassifiable half is not
+  // silently dropped from the guidance. general's guidance is the release
+  // copy (model chooses the recognition method freely).
+  const uiGeneral = buildMixedBranches('ui', ['general'])
+  assert.deepEqual(uiGeneral.map((b) => b.kind), ['ui', 'general'])
+  assert.match(uiGeneral[1].guidance, /放行/)
+  const documentGeneral = buildMixedBranches('document', ['general'])
+  assert.deepEqual(documentGeneral.map((b) => b.kind), ['document', 'general'])
+  // Cap still applies: general counts toward MAX_MIXED_BRANCHES.
+  const capped = buildMixedBranches('ui', ['document', 'general'])
+  assert.equal(capped.length, 2)
+  // unknown stays skipped (invalid value; normalizer already filters it).
+  const unknownOnly = buildMixedBranches('ui', ['unknown', 'general'])
+  assert.deepEqual(unknownOnly.map((b) => b.kind), ['ui', 'general'])
+})
+
+test('planMixedBranches: ui+general mixed_of keeps both branches', () => {
+  const plan = planMixedBranches({ visual_kind: 'mixed', mixed_of: ['ui', 'general'] })
+  assert.equal(plan.fallback, false)
+  assert.deepEqual(plan.branches.map((b) => b.kind), ['ui', 'general'])
 })
 
 test('mixedGuidance: exact sub wins, kind falls back, default releases', () => {

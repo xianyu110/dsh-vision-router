@@ -6958,7 +6958,7 @@ ctx.logger?.info(
                     }
                     // 配额不在调用前预扣：失败调用（ok:false）不烧掉档位的
                     // 深挖配额——模型保有"至少一次证据调用"提醒并可重试。
-                    // 计数移到 execute 成功后（仅 ok:true 产出证据才 +1）。
+                    // 计数移到 execute 成功后（仅产出证据才 +1）。
                   }
                   let effectiveArgs = args
                   if (
@@ -6982,10 +6982,25 @@ ctx.logger?.info(
                     state.failed !== true &&
                     structuredFollowupEvidenceTools.has(def.name)
                   ) {
-                    // 只在实际产出证据（ok:true）后递增配额并标记完成：
-                    // 后端故障/适配器错误（ok:false）不计数、不置完成，
+                    // 只在实际产出证据后递增配额并标记完成：后端故障/适配器
+                    // 错误（ok:false，对象或 JSON 字符串）不计数、不置完成，
                     // 模型仍保有提醒并可重试（maintainer review blocking 2）。
-                    if (result && typeof result === 'object' && result.ok === true) {
+                    // 各证据工具的成功形态不同（纯文本 / 数组 JSON / ok:true
+                    // JSON），统一以"结果不含 ok:false"判定产出证据。
+                    let evidenceFailure = false
+                    if (result && typeof result === 'object' && result.ok === false) {
+                      evidenceFailure = true
+                    } else if (typeof result === 'string' && result.trim() !== '') {
+                      try {
+                        const parsed = JSON.parse(result)
+                        if (parsed && typeof parsed === 'object' && parsed.ok === false) {
+                          evidenceFailure = true
+                        }
+                      } catch {
+                        evidenceFailure = false // plain text = evidence produced
+                      }
+                    }
+                    if (!evidenceFailure) {
                       state.deepCalls = (state.deepCalls || 0) + 1
                       state.followupCompleted = true
                     }
