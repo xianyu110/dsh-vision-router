@@ -8,6 +8,11 @@ import {
   createTesseractExecFileCompat,
   installTesseractExecFileCompat,
 } from '../lib/tesseract-exec-compat.js'
+import {
+  installLocalMutationRouteBoundary,
+  isLocalUiRequest,
+  isLoopbackAddress,
+} from '../lib/web-capability-boundary.js'
 
 test('coalescing runner reaches a fixed point across synchronous re-entry and mid-pass topology changes', () => {
   const providers = new Set(['alpha'])
@@ -26,13 +31,7 @@ test('coalescing runner reaches a fixed point across synchronous re-entry and mi
         if (twins.has(provider)) continue
         twins.add(provider)
         registrations.set(provider, (registrations.get(provider) ?? 0) + 1)
-
-        // Mirrors registerAdapter() synchronously emitting adapters-updated.
         reconcile()
-
-        // Mirrors another listener adding a real provider during the same
-        // synchronous event. A simple "already syncing -> return" guard loses
-        // this update if no later event arrives.
         if (provider === 'alpha' && !injectedSecondProvider) {
           injectedSecondProvider = true
           providers.add('beta')
@@ -59,8 +58,6 @@ test('coalescing runner stops a permanently dirty synchronous event cycle', () =
   reconcile = createCoalescingRunner(
     () => {
       passes += 1
-      // Pathological host/plugin semantics: every reconciliation publishes the
-      // same event again even though no stable fixed point is reachable.
       reconcile()
     },
     {
@@ -70,11 +67,8 @@ test('coalescing runner stops a permanently dirty synchronous event cycle', () =
   )
 
   reconcile()
-
   assert.equal(passes, 5)
   assert.equal(reported.passes, 5)
-  // A later real event gets a fresh bounded attempt instead of leaving the
-  // runner permanently wedged in a `running` state.
   reconcile()
   assert.equal(passes, 10)
 })
@@ -173,7 +167,6 @@ test('tesseract installer unload does not clobber a later process-level execFile
   assert.notEqual(visionPatch, hostExecFile)
   assert.equal(visionPatch.active, true)
 
-  // A later plugin captures Vision Router then becomes the top-level patch.
   const laterPatch = function (...args) {
     return visionPatch.apply(this, args)
   }
@@ -185,13 +178,221 @@ test('tesseract installer unload does not clobber a later process-level execFile
   assert.equal(visionPatch.active, false, 'captured Vision Router wrapper becomes inert')
   assert.ok(syncCalls >= 2, 'ESM binding is resynced to the current authoritative patch')
 
-  // If the later plugin eventually restores what it captured, the old Vision
-  // Router layer must delegate directly instead of re-enabling OCR materialize.
-  let seenArgs
   const callback = () => {}
   hostCalls.length = 0
   visionPatch('tesseract', ['stdin', 'stdout'], { input: pngBytes }, callback)
-  seenArgs = hostCalls[0]
+  const seenArgs = hostCalls[0]
   assert.equal(seenArgs[1][0], 'stdin')
   assert.equal(seenArgs[2].input, pngBytes)
+})
+
+test('loopback transport detection covers IPv4, IPv6 and IPv4-mapped IPv6 only', () => {
+  assert.equal(isLoopbackAddress('127.0.0.1'), true)
+  assert.equal(isLoopbackAddress('127.99.3.4'), true)
+  assert.equal(isLoopbackAddress('::1'), true)
+  assert.equal(isLoopbackAddress('::ffff:127.0.0.1'), true)
+  assert.equal(isLoopbackAddress('192.168.1.8'), false)
+  assert.equal(isLoopbackAddress('::ffff:192.168.1.8'), false)
+  assert.equal(isLoopbackAddress('localhost'), false, 'headers/names are not transport identity')
+})
+
+test('local UI capability requires loopback transport and a local Host on real HTTP requests', () => {
+  assert.equal(isLocalUiRequest({ socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'localhost:3000' } }), true)
+  assert.equal(isLocalUiRequest({ socket: { remoteAddress: '::1' }, headers: { host: '[::1]:3000' } }), true)
+  assert.equal(
+    isLocalUiRequest({ socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'router.example.com' } }),
+    false,
+    'a reverse proxy must not turn an external Host into a local-machine capability',
+  )
+  assert.equal(isLocalUiRequest({ socket: { remoteAddress: '192.168.1.8' }, headers: { host: '127.0.0.1:3000' } }), false)
+  assert.equal(isLocalUiRequest({ headers: {} }), true, 'internal direct handler calls remain supported')
+})
+
+function responseRecorder() {
+  return {
+    status: undefined,
+    body: '',
+    headers: {},
+    setHeader(name, value) { this.headers[String(name).toLowerCase()] = value },
+    removeHeader(name) { delete this.headers[String(name).toLowerCase()] },
+    writeHead(status, headers = {}) {
+      this.status = status
+      for (const [name, value] of Object.entries(headers)) this.setHeader(name, value)
+    },
+    end(body) { this.body = String(body ?? '') },
+  }
+}
+
+test('local mutation boundary preserves injected child identity and rejects remote side effects', async () => {
+  const routes = new Map()
+  const cleanups = []
+  const child = {
+    webServer: {
+      register(route) {
+        routes.set(route.path, route)
+        return () => {}
+      },
+    },
+    effect(factory) {
+      const cleanup = factory()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+      return cleanup
+    },
+  }
+  const ctx = {
+    inject(_dependencies, callback) { return callback(child) },
+    effect(factory) {
+      const cleanup = factory()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+      return cleanup
+    },
+  }
+  const wrapped = installLocalMutationRouteBoundary(ctx)
+  let seenChild
+  let calls = 0
+  wrapped.inject(['webServer'], (injected) => {
+    seenChild = injected
+    injected.webServer.register({
+      kind: 'exact',
+      path: '/_dsh/vision-router/self-update',
+      handler(_req, res) {
+        calls += 1
+        res.writeHead(200)
+        res.end('ok')
+      },
+    })
+  })
+  assert.equal(seenChild, child, 'Cordis injection identity must remain exact')
+  const registered = routes.get('/_dsh/vision-router/self-update')
+
+  let res = responseRecorder()
+  await registered.handler(
+    { method: 'POST', socket: { remoteAddress: '192.168.1.55' }, headers: { host: '127.0.0.1:3000' } },
+    res,
+  )
+  assert.equal(res.status, 403)
+  assert.equal(calls, 0)
+
+  res = responseRecorder()
+  await registered.handler(
+    { method: 'POST', socket: { remoteAddress: '::ffff:127.0.0.1' }, headers: { host: 'localhost:3000' } },
+    res,
+  )
+  assert.equal(res.status, 200)
+  assert.equal(calls, 1)
+
+  res = responseRecorder()
+  await registered.handler(
+    { method: 'POST', socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'router.example.com' } },
+    res,
+  )
+  assert.equal(res.status, 403, 'reverse-proxy-local transport with an external Host stays remote')
+  assert.equal(calls, 1)
+
+  // Capability+method specific: GET on the mutation route itself is still the
+  // real handler's responsibility.
+  res = responseRecorder()
+  await registered.handler(
+    { method: 'GET', socket: { remoteAddress: '10.0.0.8' }, headers: { host: 'router.example.com' } },
+    res,
+  )
+  assert.equal(res.status, 200)
+  assert.equal(calls, 2)
+
+  for (const cleanup of cleanups.reverse()) cleanup()
+})
+
+test('remote update-check keeps version metadata but never receives the one-click mutation token', async () => {
+  let route
+  const child = {
+    webServer: {
+      register(spec) {
+        route = spec
+        return () => {}
+      },
+    },
+    effect(factory) { return factory() },
+  }
+  const ctx = {
+    inject(_dependencies, callback) { return callback(child) },
+    effect(factory) { return factory() },
+  }
+  const wrapped = installLocalMutationRouteBoundary(ctx)
+  wrapped.inject(['webServer'], (injected) => {
+    injected.webServer.register({
+      kind: 'exact',
+      path: '/_dsh/vision-router/update-check',
+      async handler(_req, res) {
+        await Promise.resolve()
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': '999' })
+        res.end(JSON.stringify({
+          ok: true,
+          currentVersion: '1.0.0',
+          latestVersion: '1.0.1',
+          updateAvailable: true,
+          autoUpdate: { supported: true, method: 'dsh-plugin-add', token: 'secret-token' },
+        }))
+      },
+    })
+  })
+
+  let res = responseRecorder()
+  await route.handler(
+    { method: 'GET', socket: { remoteAddress: '192.168.1.9' }, headers: { host: 'router.example.com' } },
+    res,
+  )
+  const remote = JSON.parse(res.body)
+  assert.equal(remote.ok, true)
+  assert.equal(remote.updateAvailable, true)
+  assert.equal(remote.autoUpdate.supported, true)
+  assert.equal(remote.autoUpdate.token, undefined)
+  assert.equal(res.headers['content-length'], undefined)
+
+  res = responseRecorder()
+  await route.handler(
+    { method: 'GET', socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'localhost:3000' } },
+    res,
+  )
+  const local = JSON.parse(res.body)
+  assert.equal(local.autoUpdate.token, 'secret-token')
+})
+
+test('remote log metadata is redacted even when a reverse proxy makes the TCP peer loopback', async () => {
+  let route
+  const child = {
+    webServer: {
+      register(spec) {
+        route = spec
+        return () => {}
+      },
+    },
+    effect(factory) { return factory() },
+  }
+  const ctx = {
+    inject(_dependencies, callback) { return callback(child) },
+    effect(factory) { return factory() },
+  }
+  const wrapped = installLocalMutationRouteBoundary(ctx)
+  wrapped.inject(['webServer'], (injected) => {
+    injected.webServer.register({
+      kind: 'exact',
+      path: '/_dsh/vision-router/logs',
+      handler(_req, res) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, local: true, canOpen: true, directory: '/secret/home/logs', file: '/secret/home/logs/x.log' }))
+      },
+    })
+  })
+
+  const res = responseRecorder()
+  await route.handler(
+    { method: 'GET', socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'router.example.com' } },
+    res,
+  )
+  const remote = JSON.parse(res.body)
+  assert.equal(remote.ok, true)
+  assert.equal(remote.local, false)
+  assert.equal(remote.canOpen, false)
+  assert.equal(remote.directory, undefined)
+  assert.equal(remote.file, undefined)
 })
