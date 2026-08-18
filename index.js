@@ -19,7 +19,7 @@
 export * from './lib/vision-resilience.js'
 
 import z from '@deepseek-ai/schemastery'
-import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, unlink, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { DeepSeekAdapter, resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
@@ -335,6 +335,11 @@ export const Config = z.object({
   ocrTimeoutMs: z.number().step(1).min(1000).max(120000).default(30000),
   proxy: z.string().default(''),
   proxyHosts: z.array(z.string()).default([...DEFAULT_PROXY_HOSTS]),
+  // Remote browsers are intentionally unable to use DSH's broad settings.*
+  // plane. This narrow Vision Router bridge is opt-in and still uses DSH's
+  // trusted-host transport fence. Only a loopback/local settings page may
+  // change this permission; the remote bridge rejects writes to the field.
+  allowRemoteSettings: z.boolean().default(false),
   freeFallback: z.boolean().default(true),
   // 云端免费优先：开启后，云端后端先尝试内置 OVH 免费模型（免注册、免
   // API Key），付费 httpProviders 仅在免费模型全部失败后作为兜底，尽量把
@@ -486,6 +491,22 @@ export function isAttachmentIdInput(input) {
  * artifacts all collapsed onto the same stem and silently overwrote each
  * other. A short fingerprint of the FULL input keeps every input distinct.
  */
+
+/** Resolve a configured artifact root and refuse lexical workspace escapes. */
+export function resolveArtifactRootPath(workspace, configured) {
+  const root = path.resolve(String(workspace ?? ''))
+  const raw = typeof configured === 'string' && configured.trim() !== ''
+    ? configured.trim()
+    : '.dsh-vision-router/artifacts'
+  if (path.isAbsolute(raw)) throw new Error('artifactsDir must be relative to the session workspace')
+  const target = path.resolve(root, raw)
+  const relative = path.relative(root, target)
+  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+    throw new Error('artifactsDir must stay inside the session workspace')
+  }
+  return target
+}
+
 export function artifactStemOf(imagePath, suffix) {
   const base = String(basenameOf(imagePath) ?? 'image')
     .replace(/\.(png|jpe?g|webp|gif)$/i, '')
@@ -5671,6 +5692,19 @@ ctx.logger?.info(
         ? config.artifactsDir
         : '.dsh-vision-router/artifacts'
 
+    const ensureArtifactRoot = async (exec) => {
+      const workspace = path.resolve(workspaceOf(exec))
+      const target = resolveArtifactRootPath(workspace, artifactsRel)
+      await mkdir(target, { recursive: true })
+      // Defend against an in-workspace symlink named as the artifact directory.
+      const [workspaceReal, targetReal] = await Promise.all([realpath(workspace), realpath(target)])
+      const relative = path.relative(workspaceReal, targetReal)
+      if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+        throw new Error('artifactsDir resolves outside the session workspace')
+      }
+      return targetReal
+    }
+
     const readImageBytes = async (exec, imagePath) => {
       const input = String(imagePath ?? '')
       let bytes
@@ -5731,8 +5765,7 @@ ctx.logger?.info(
     }
 
     const saveArtifact = async (exec, relPath, data) => {
-      const dir = path.join(workspaceOf(exec), artifactsRel)
-      await mkdir(dir, { recursive: true })
+      const dir = await ensureArtifactRoot(exec)
       const target = path.join(dir, relPath)
       await writeFile(target, data)
       return target
@@ -6563,7 +6596,8 @@ ctx.logger?.info(
           maxTilePixels: 4_000_000,
         })
         const stem = artifactStem(args.image, 'ocr')
-        const dir = path.join(workspaceOf(exec), artifactsRel, stem)
+        const root = await ensureArtifactRoot(exec)
+        const dir = path.join(root, stem)
         await mkdir(dir, { recursive: true })
         // ONE deadline for the whole long-OCR task: every chunk's tesseract
         // slice and every vision fallback draws from the same budget, so a
