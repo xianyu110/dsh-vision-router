@@ -1,0 +1,46 @@
+name: Apply rc7 conformance patch
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/_temp-rc7-conformance.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rc7-conformance
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.20.0
+      - run: corepack enable
+      - name: Execute staged patch script
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+          workflow = Path('.github/workflows/rc7-conformance-patch.yml').read_text()
+          start_marker = "          from pathlib import Path\n"
+          end_marker = "\n          PY\n"
+          start = workflow.index(start_marker)
+          end = workflow.index(end_marker, start)
+          script = textwrap.dedent(workflow[start:end])
+          exec(compile(script, 'rc7-conformance-patch.py', 'exec'), {'__name__': '__main__'})
+          PY
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+      - name: Run full test suite
+        run: pnpm test
+      - name: Commit validated patch to PR branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: align with dsh rc7 contracts"
+          git push origin HEAD:agent/rc7-conformance
