@@ -4,12 +4,15 @@ on:
   push:
     branches: [main]
     paths: [.github/workflows/_temp-rc7-conformance.yml]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: github.event_name == 'push' || github.head_ref == 'agent/rc7-conformance'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
