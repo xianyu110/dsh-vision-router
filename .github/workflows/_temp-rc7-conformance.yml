@@ -31,7 +31,9 @@ jobs:
         run: corepack enable
       - if: steps.state.outputs.captured == 'false'
         name: Apply compatibility patch
-        run: python scripts/_rc7_patch.py
+        run: |
+          python scripts/_rc7_patch.py
+          python scripts/_rc7_test_fix.py
       - if: steps.state.outputs.captured == 'false'
         name: Install dependencies
         run: pnpm install --frozen-lockfile=false
@@ -54,7 +56,7 @@ jobs:
         run: |
           rm -f .rc7-test-output.txt
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+ysr666@users.noreply.github.com"
           git add -A
           git commit -m "fix: align with dsh rc7 contracts"
           git push origin HEAD:agent/rc7-conformance
