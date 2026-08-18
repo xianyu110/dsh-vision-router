@@ -23,6 +23,17 @@ test('bootstrap memory has no task/goal tag', () => {
   assert.doesNotMatch(memory, /任务=/)
 })
 
+test('bootstrap schema carries content_kind and normalizer validates it', () => {
+  const prompt = structuredBootstrapQuestion()
+  assert.match(prompt, /content_kind/)
+  assert.match(prompt, /person\|animal\|plant\|food\|vehicle\|machine\|architecture\|object\|scene\|meme\|unknown/)
+  // 合法枚举通过；缺失/非法 → unknown
+  assert.equal(normalizeStructuredBootstrapResult({ visual_kind: 'general', content_kind: 'food' }).content_kind, 'food')
+  assert.equal(normalizeStructuredBootstrapResult({ visual_kind: 'general', content_kind: 'bogus' }).content_kind, 'unknown')
+  assert.equal(normalizeStructuredBootstrapResult({ visual_kind: 'document' }).content_kind, 'unknown')
+  assert.equal(normalizeStructuredBootstrapResult({ visual_kind: 'document', content_kind: 'person' }).content_kind, 'person')
+})
+
 test('runtime removes goal and makes structured OCR vision-first', () => {
   const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')

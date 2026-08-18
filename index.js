@@ -4809,11 +4809,12 @@ export function apply(ctx, config = {}) {
       // mixed 分路识别（精度优化）：bootstrap 判出混合内容时，按分支注入
       // 引导，避免模型漏判/错判另一半内容；非 mixed / 细分失败时无分支引导。
       const mixedGuidanceText = renderMixedGuidance(bootstrapState && bootstrapState.mixedPlan)
-      // 场景/档位引导：mixed 用分支引导 + 档位句；非 mixed 用场景引导 + 档位句
-      // （场景引导按 bootstrap 判出的 visual_kind 查表，general 走内容方向提示）。
+      // 场景/内容/档位引导：mixed 用分支引导 + 档位句；非 mixed 用场景引导 + 档位句
+      // （场景引导按 visual_kind 查表；general 用 content_kind 内容引导——bootstrap 判出）。
       const depthCopy = renderDepthGuidance({ depth: visionDepth() })
       const sceneDepth = renderDepthGuidance({
         visualKind: bootstrapState && bootstrapState.visualKind,
+        contentKind: bootstrapState && bootstrapState.contentKind,
         depth: visionDepth(),
       })
       const guidanceBlock = mixedGuidanceText ? `${mixedGuidanceText}${depthCopy}` : sceneDepth
@@ -5581,10 +5582,12 @@ ctx.logger?.info(
           bootstrapState.followupCompleted = false
         }
         const evidence = normalizeStructuredBootstrapResult(parsed, raw)
-        // 存 visual_kind（所有情况），mixed 时额外规划分支（精度优化）。
-        // 结果存进 turn 状态，供下一次 pre-step 的 followupReminder 按场景/分支注入引导。
+        // 存 visual_kind（媒介）与 content_kind（内容主体，general 图的大小类判定键），
+        // mixed 时额外规划分支（精度优化）。结果存进 turn 状态，供下一次 pre-step 的
+        // followupReminder 按场景/内容/分支注入引导。
         if (bootstrapState) {
           bootstrapState.visualKind = evidence.visual_kind
+          bootstrapState.contentKind = evidence.content_kind
           if (evidence.visual_kind === 'mixed') {
             bootstrapState.mixedPlan = planMixedBranches(evidence)
           }

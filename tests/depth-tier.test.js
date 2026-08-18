@@ -18,12 +18,12 @@ test('depthLimitFor: fast=1, deep=4, standard undefined (no hard cap)', () => {
   assert.equal(depthLimitFor(undefined), undefined)
 })
 
-test('sceneGuidanceFor: known kinds have guidance, unknown/mixed release', () => {
+test('sceneGuidanceFor: known kinds have guidance, general/unknown/mixed release', () => {
   assert.match(sceneGuidanceFor('code'), /逐字/)
   assert.match(sceneGuidanceFor('document'), /语义优先/)
   assert.match(sceneGuidanceFor('ui'), /detect/)
   assert.match(sceneGuidanceFor('chat'), /气泡/)
-  assert.match(sceneGuidanceFor('general'), /主体属于哪类/)
+  assert.equal(sceneGuidanceFor('general'), '') // general 走 content_kind 内容引导
   assert.equal(sceneGuidanceFor('unknown'), '')
   assert.equal(sceneGuidanceFor('mixed'), '')
   assert.equal(sceneGuidanceFor(undefined), '')
@@ -42,9 +42,16 @@ test('renderDepthGuidance: scene + depth for document', () => {
   assert.match(text, /2-4 次充分深挖/)
 })
 
-test('renderDepthGuidance: general falls to content-direction guidance', () => {
-  const text = renderDepthGuidance({ visualKind: 'general', depth: 'standard' })
-  assert.match(text, /主体属于哪类/)
+test('renderDepthGuidance: general uses content_kind precise guidance when known', () => {
+  const text = renderDepthGuidance({ visualKind: 'general', contentKind: 'food', depth: 'standard' })
+  assert.match(text, /食物/)
+  assert.match(text, /standard/)
+  assert.doesNotMatch(text, /请先判断/) // 已知 content_kind 时不再要求模型自判
+})
+
+test('renderDepthGuidance: general falls to self-judge guidance when content_kind unknown', () => {
+  const text = renderDepthGuidance({ visualKind: 'general', contentKind: 'unknown', depth: 'standard' })
+  assert.match(text, /请先判断图中主体/)
   assert.match(text, /standard/)
 })
 
@@ -70,6 +77,7 @@ test('index.js integration: visionDepth wired into Config, bootstrap state and t
   const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   assert.equal(index.includes("visionDepth: z.union(['fast', 'standard', 'deep']).default('standard')"), true)
   assert.equal(index.includes('bootstrapState.visualKind = evidence.visual_kind'), true)
+  assert.equal(index.includes('bootstrapState.contentKind = evidence.content_kind'), true)
   assert.equal(index.includes('depthLimitFor(visionDepth())'), true)
   assert.equal(index.includes("code: 'VISION_DEPTH_LIMIT'"), true)
   assert.equal(index.includes('renderDepthGuidance({'), true)
