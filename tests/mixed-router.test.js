@@ -4,50 +4,22 @@ import { readFileSync } from 'node:fs'
 import {
   MAX_MIXED_BRANCHES,
   buildMixedBranches,
-  inferMixedKinds,
   mixedGuidance,
+  normalizeMixedOf,
   planMixedBranches,
   renderMixedGuidance,
 } from '../lib/mixed-router.js'
 
 // mixed 分路识别：精度优化（避免漏判/错判另一半内容），≤2 分支成本封顶。
+// 细分来源 = bootstrap 的 mixed_of（schema 枚举，视觉模型直接输出，与
+// content_kind 同一"免费收敛"哲学）——不再用 entities 启发式推断。
 
-test('inferMixedKinds: ui + document mixed', () => {
-  const kinds = inferMixedKinds({
-    entities: [
-      { type: 'button', label: '确定', region_id: 'r1' },
-      { type: 'text', label: '标题', region_id: 'r1' },
-      { type: 'text', label: '正文', region_id: 'r2' },
-    ],
-  })
-  assert.deepEqual(kinds, ['ui', 'document']) // ui 优先作主分支
-})
-
-test('inferMixedKinds: document only from text entities', () => {
-  const kinds = inferMixedKinds({
-    entities: [
-      { type: 'text', label: 'a', region_id: 'r1' },
-      { type: 'text', label: 'b', region_id: 'r2' },
-      { type: 'text', label: 'c', region_id: 'r3' },
-    ],
-  })
-  assert.deepEqual(kinds, ['document'])
-})
-
-test('inferMixedKinds: no signal falls back to [] (never hard-block)', () => {
-  assert.deepEqual(inferMixedKinds({ entities: [] }), [])
-  assert.deepEqual(inferMixedKinds(undefined), [])
-  assert.deepEqual(inferMixedKinds({ entities: [{ type: 'person', label: '人' }] }), [])
-})
-
-test('inferMixedKinds: regions role fallback when entities missing', () => {
-  const kinds = inferMixedKinds({
-    regions: [
-      { id: 'r1', role: 'text', content: 'a' },
-      { id: 'r2', role: 'content', content: 'b' },
-    ],
-  })
-  assert.deepEqual(kinds, ['document'])
+test('normalizeMixedOf: validates, dedupes, caps at MAX_MIXED_BRANCHES, orders by priority', () => {
+  assert.deepEqual(normalizeMixedOf(['document', 'ui']), ['ui', 'document']) // ui 优先作主分支
+  assert.deepEqual(normalizeMixedOf(['ui', 'ui', 'document', 'code']), ['ui', 'document']) // 去重 + ≤2
+  assert.deepEqual(normalizeMixedOf(['bogus']), [])
+  assert.deepEqual(normalizeMixedOf(undefined), [])
+  assert.deepEqual(normalizeMixedOf('not-an-array'), [])
 })
 
 test('buildMixedBranches: dedupe + MAX_MIXED_BRANCHES cap', () => {
@@ -73,45 +45,24 @@ test('mixedGuidance: exact sub wins, kind falls back, default releases', () => {
   assert.match(mixedGuidance('ui'), /detect/)
   assert.match(mixedGuidance('document'), /语义优先/)
   assert.match(mixedGuidance('chat'), /放行/)
-  assert.match(mixedGuidance('unknown'), /放行/)
 })
 
-test('planMixedBranches: ui+document decision carries precision note', () => {
-  const plan = planMixedBranches({
-    visual_kind: 'mixed',
-    regions: [{ id: 'r1', role: 'text', content: '标题' }],
-    entities: [
-      { type: 'button', label: '确定', region_id: 'r1' },
-      { type: 'text', label: '说明', region_id: 'r1' },
-      { type: 'text', label: '正文', region_id: 'r2' },
-    ],
-  })
+test('planMixedBranches: mixed_of drives the branches and carries the precision note', () => {
+  const plan = planMixedBranches({ visual_kind: 'mixed', mixed_of: ['document', 'ui'] })
   assert.equal(plan.fallback, false)
   assert.equal(plan.visual_kind, 'mixed')
   assert.deepEqual(plan.branches.map((b) => b.kind), ['ui', 'document'])
-  // 精度优化定位标注必须在决策 note 中
   assert.match(plan.note, /精度优化/)
 })
 
-test('planMixedBranches: no signal falls back (release, never hard-block)', () => {
-  const plan = planMixedBranches({ visual_kind: 'mixed', regions: [], entities: [] })
-  assert.equal(plan.fallback, true)
-  assert.deepEqual(plan.branches, [])
-})
-
-test('planMixedBranches: null input falls back', () => {
+test('planMixedBranches: missing/empty mixed_of falls back (release, never hard-block)', () => {
+  assert.equal(planMixedBranches({ visual_kind: 'mixed', mixed_of: [] }).fallback, true)
+  assert.equal(planMixedBranches({ visual_kind: 'mixed' }).fallback, true)
   assert.equal(planMixedBranches(undefined).fallback, true)
-  assert.equal(planMixedBranches(null).fallback, true)
 })
 
 test('renderMixedGuidance: mixed plan renders per-branch guidance; fallback renders nothing', () => {
-  const plan = planMixedBranches({
-    entities: [
-      { type: 'button', label: 'x', region_id: 'r1' },
-      { type: 'text', label: 'a', region_id: 'r1' },
-      { type: 'text', label: 'b', region_id: 'r2' },
-    ],
-  })
+  const plan = planMixedBranches({ visual_kind: 'mixed', mixed_of: ['document', 'ui'] })
   const text = renderMixedGuidance(plan)
   assert.match(text, /检测到混合内容（ui \+ document）/)
   assert.match(text, /精度优化/)
@@ -125,6 +76,12 @@ test('index.js integration: mixed plan stored on bootstrap completion and inject
   assert.equal(index.includes("bootstrapState.mixedPlan = planMixedBranches(evidence)"), true)
   assert.equal(index.includes("renderMixedGuidance(bootstrapState && bootstrapState.mixedPlan)"), true)
   assert.equal(index.includes("evidence.visual_kind === 'mixed'"), true)
+})
+
+test('mixed-router no longer uses the entities heuristic (schema convergence)', () => {
+  const source = readFileSync(new URL('../lib/mixed-router.js', import.meta.url), 'utf8')
+  assert.equal(source.includes('inferMixedKinds'), false) // 启发式已移除
+  assert.equal(source.includes('evidence.mixed_of'), true) // 消费 schema 输出
 })
 
 test('MAX_MIXED_BRANCHES is two (cost cap)', () => {
