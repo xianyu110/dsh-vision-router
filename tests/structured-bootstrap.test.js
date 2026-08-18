@@ -23,6 +23,35 @@ test('bootstrap memory has no task/goal tag', () => {
   assert.doesNotMatch(memory, /任务=/)
 })
 
+test('bootstrap schema carries content_kind and normalizer validates it', () => {
+  const prompt = structuredBootstrapQuestion()
+  assert.match(prompt, /content_kind/)
+  assert.match(prompt, /person\|animal\|plant\|food\|vehicle\|machine\|architecture\|object\|scene\|meme\|unknown/)
+  // 合法枚举通过；缺失/非法 → unknown
+  assert.equal(normalizeStructuredBootstrapResult({ visual_kind: 'general', content_kind: 'food' }).content_kind, 'food')
+  assert.equal(normalizeStructuredBootstrapResult({ visual_kind: 'general', content_kind: 'bogus' }).content_kind, 'unknown')
+  assert.equal(normalizeStructuredBootstrapResult({ visual_kind: 'document' }).content_kind, 'unknown')
+  assert.equal(normalizeStructuredBootstrapResult({ visual_kind: 'document', content_kind: 'person' }).content_kind, 'person')
+})
+
+test('bootstrap schema carries mixed_of and normalizer validates it', () => {
+  const prompt = structuredBootstrapQuestion()
+  assert.match(prompt, /mixed_of/)
+  // 合法混合构成：校验 + 去重 + ≤2
+  assert.deepEqual(
+    normalizeStructuredBootstrapResult({ visual_kind: 'mixed', mixed_of: ['document', 'ui'] }).mixed_of,
+    ['document', 'ui'],
+  )
+  assert.deepEqual(
+    normalizeStructuredBootstrapResult({ visual_kind: 'mixed', mixed_of: ['ui', 'ui', 'document', 'code'] }).mixed_of,
+    ['ui', 'document'],
+  )
+  // 非法/缺失 → []
+  assert.deepEqual(normalizeStructuredBootstrapResult({ visual_kind: 'mixed', mixed_of: ['bogus'] }).mixed_of, [])
+  assert.deepEqual(normalizeStructuredBootstrapResult({ visual_kind: 'mixed' }).mixed_of, [])
+  assert.deepEqual(normalizeStructuredBootstrapResult({ visual_kind: 'document', mixed_of: ['ui'] }).mixed_of, ['ui'])
+})
+
 test('runtime removes goal and makes structured OCR vision-first', () => {
   const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
