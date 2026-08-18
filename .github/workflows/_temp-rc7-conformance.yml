@@ -27,13 +27,13 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import textwrap
           workflow = Path('.github/workflows/rc7-conformance-patch.yml').read_text()
           start_marker = "          from pathlib import Path\n"
           end_marker = "\n          PY\n"
           start = workflow.index(start_marker)
           end = workflow.index(end_marker, start)
-          script = textwrap.dedent(workflow[start:end])
+          raw = workflow[start:end]
+          script = ''.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines(True))
           exec(compile(script, 'rc7-conformance-patch.py', 'exec'), {'__name__': '__main__'})
           PY
       - name: Install dependencies
