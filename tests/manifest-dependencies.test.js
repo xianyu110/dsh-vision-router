@@ -26,6 +26,28 @@ test('host-provided DSH packages are peers and mirrored for development', async 
   }
 })
 
+test('host-provided peers are optional so profile installs never warn about missing peers', async () => {
+  const pkg = await manifest()
+  // The two DSH packages are resolved by the host's own module graph, and
+  // sharp falls back to the host instance — pnpm at the profile level cannot
+  // see any of them, so a mandatory peer would print "Issues with peer
+  // dependencies found" on every user install. Optional peers keep the
+  // prefer-host semantics without the warning.
+  const optionalPeers = [
+    '@deepseek-ai/dsh-anonymous-user-id',
+    '@deepseek-ai/dsh-llm-deepseek',
+    'sharp',
+  ]
+  for (const name of optionalPeers) {
+    assert.equal(typeof pkg.peerDependencies?.[name], 'string', `${name} must remain a peerDependency`)
+    assert.equal(
+      pkg.peerDependenciesMeta?.[name]?.optional,
+      true,
+      `${name} must be marked optional in peerDependenciesMeta`,
+    )
+  }
+})
+
 test('schemastery remains a runtime dependency', async () => {
   const pkg = await manifest()
   assert.equal(typeof pkg.dependencies?.['@deepseek-ai/schemastery'], 'string')
