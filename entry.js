@@ -14,6 +14,12 @@ import { installAdversarialHardening } from './lib/adversarial-hardening.js'
 import { installLocalVisionStabilizer } from './lib/local-vision-stabilizer.js'
 import { installWrapperDirectoryAlias } from './lib/wrapper-directory.js'
 import { installAndroidAttachmentCompat } from './lib/android-attachment-compat.js'
+import {
+  attachmentContextForContract,
+  installRc7SettingsCompatibility,
+  isRc7ContractRuntime,
+  protectRc7ProviderOwnership,
+} from './lib/dsh-contract-compat.js'
 
 // Schemastery object schemas expose set() as the supported way to replace a
 // field schema. This mutates the Config object that index.js itself later uses
@@ -22,6 +28,12 @@ import { installAndroidAttachmentCompat } from './lib/android-attachment-compat.
 core.Config.set('progressiveTools', z.boolean().default(false))
 
 export * from './index.js'
+export {
+  attachmentContextForContract,
+  installRc7SettingsCompatibility,
+  isRc7ContractRuntime,
+  protectRc7ProviderOwnership,
+} from './lib/dsh-contract-compat.js'
 export const Config = core.Config
 
 // Defense in depth for direct/programmatic callers that invoke apply() without
@@ -58,11 +70,26 @@ export function apply(ctx, config = {}) {
     hardenedConfig,
     core,
   )
-  // #182: Android/Termux cannot open /data/data for the attachment-local
-  // durability walk. Keep this workaround private to Vision Router so the
-  // host attachment service and every non-Android runtime retain their normal
-  // semantics. Once DSH accepts the save, the compatibility path is inert.
-  const attachmentCompatCtx = installAndroidAttachmentCompat(stabilizedCtx, logging.logger)
+  const runtimeConfig = {
+    ...bootConfig,
+    progressiveTools: hardenedConfig.progressiveTools === true,
+  }
+  const rc7 = isRc7ContractRuntime(stabilizedCtx)
+  const ownershipCtx = rc7 ? protectRc7ProviderOwnership(stabilizedCtx) : stabilizedCtx
+  const settingsCtx = rc7
+    ? installRc7SettingsCompatibility(ownershipCtx, { ...runtimeConfig, stealth: false }, {
+        namespace: 'vision-router',
+        Config: core.Config,
+      })
+    : ownershipCtx
+  // rc.6/Termux keeps the narrow process-local fallback that was required by
+  // the old attachment-local durability walk. rc.7 formalizes AttachmentId as
+  // store-owned, so never synthesize one there: host persistence errors remain
+  // authoritative and diagnosable instead of creating a false durable ref.
+  const attachmentCompatCtx = attachmentContextForContract(settingsCtx, logging.logger, {
+    installAndroidAttachmentCompat,
+  })
+
   // 启动诊断摘要只描述 composition/apply 的基础配置。设置服务可能稍后
   // 覆盖这些值；每个图片轮还会记录 current() 的实时决策，避免把这个
   // 启动快照误当成最终设置状态。
@@ -71,7 +98,8 @@ export function apply(ctx, config = {}) {
     const local = c.localOllama && typeof c.localOllama === 'object' ? c.localOllama : {}
     const lms = c.localLmStudio && typeof c.localLmStudio === 'object' ? c.localLmStudio : {}
     logging.logger.info(
-      'vision-router: base config summary — instantDescribe=%s localDescribeStyle=%s localOllama=%s localLmStudio=%s',
+      'vision-router: base config summary — contract=%s instantDescribe=%s localDescribeStyle=%s localOllama=%s localLmStudio=%s',
+      rc7 ? 'rc7' : 'rc6',
       c.instantDescribe === true ? 'on' : 'off',
       c.localDescribeStyle === 'structured' ? 'structured' : 'plain',
       local.enabled === true ? 'on' : 'off',
@@ -81,16 +109,12 @@ export function apply(ctx, config = {}) {
     /* diagnostics must never break apply */
   }
   try {
-    const runtimeConfig = {
-      ...bootConfig,
-      progressiveTools: hardenedConfig.progressiveTools === true,
-    }
     const result = core.apply(attachmentCompatCtx, runtimeConfig)
     // DSH rc.7's Settings -> Models surface is backed by the configurable
     // provider directory, not by the live adapter registry alone. Publish the
     // main DeepSeek + 自动识图 route as a derived alias of official DeepSeek so
     // a reinstall restores the expected model-group row without making an
-    // arbitrary textProvider look like DeepSeek.
+    // arbitrary textProvider look like DeepSeek. On rc.6 the helper is inert.
     installWrapperDirectoryAlias(attachmentCompatCtx, runtimeConfig, logging.logger)
     if (result && typeof result.then === 'function') {
       return result.catch((error) => {

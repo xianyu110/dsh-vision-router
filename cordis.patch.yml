@@ -4,9 +4,9 @@
 # without any manual cordis.patch.yml edits. Later layers (the profile's own
 # cordis.patch.yml, --patch overlays) override these rows by id.
 
-# 纯增量补丁（issue #34）：不碰核心行。官方 llm-deepseek 行保持原样，插件
-# 挂载后是否接管官方 deepseek-official 路由由设置里的「隐身模式」开关决定
-# （默认关；开启后需自行在 profile 补丁层禁用 llm-deepseek 行）。
+# 纯增量补丁（issue #34）：不碰核心行。DSH rc.6仍保留旧版隐身接管兼容路径；
+# DSH rc.7则始终由宿主拥有deepseek-official，插件只提供「+ 自动识图」包装路由。
+# 因此这里永远不默认禁用官方llm-deepseek行。
 
 # 挂载插件行。默认保持完整视觉工具表常驻（issue #81）：虽然渐进挂载可以
 # 少发一小段工具 schema，但图片轮首次扩展工具列表会改变请求前缀，可能让
@@ -17,10 +17,3 @@
       name: dsh-vision-router
       config:
         progressiveTools: false
-
-# 放宽附件图片限制（部署默认 5MB / 4000 万像素 → 20MB / 1 亿像素），
-# 大尺寸设计稿/扫描图可过审。字段可选，不需要可在 profile 补丁层覆写。
-- id: attachment-local
-  config:
-    maxImageBytes: 20971520
-    maxImagePixels: 100000000
