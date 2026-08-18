@@ -12,6 +12,7 @@
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin" /></a>
   <a href="https://github.com/zp-home/dsh-recommend"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzp-home%2Fdsh-recommend%2Fmain%2Fdata%2Fbadges%2Fysr666__dsh-vision-router.certified.json&amp;style=flat-square" alt="dsh-recommend 🏅 精选认证" /></a>
   <a href="https://github.com/zp-home/dsh-recommend"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fzp-home%2Fdsh-recommend%2Fmain%2Fdata%2Fbadges%2Fysr666__dsh-vision-router.json&amp;style=flat-square" alt="dsh score 0.90" /></a>
+  <a href="https://dshplugin.app/plugins/dsh-vision-router"><img src="https://img.shields.io/badge/DSHPlugin.app-listed-555?style=flat-square" alt="已收录于 DSHPlugin.app" /></a>
 </p>
 
 <p align="center">
@@ -115,6 +116,9 @@
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
 ```
+
+> [!WARNING]
+> 如果这个 profile 里已经有通过 `cordis.patch.yml` **手动挂载**的社区插件，不要再把这种旧式加载方式与 `dsh plugin add` / `dsh plugin list` 混用：当前 DSH CLI 可能同时把带 bundle patch 的依赖追加到 `dsh.profile.bundles`，导致这些插件被重复注册。请先把原有手动插件迁移到 bundle 管理方式，或继续沿用手动安装路径。详见 [deepseek-harness Discussion #2889](https://github.com/deepseek-ai/deepseek-harness/discussions/2889)。
 
 > [!NOTE]
 > 第三方 `dsh-web-plugin-manager` / `dshpm` **v0.4.2+** 现已兼容：其质量门已正确放行作为运行时依赖的 `@deepseek-ai/schemastery`。上面的官方 DSH CLI 仍是推荐安装方式。
@@ -409,6 +413,9 @@ ollama pull qwen2.5vl
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router
 ```
+
+> [!NOTE]
+> 如果 profile 混用了旧式 `cordis.patch.yml` 手动插件行与 bundle 管理方式，请先阅读[快速开始](#1-安装插件)里的兼容警告，再执行 DSH plugin 命令。
 
 从 DeepSeek Harness 源码仓库运行：
 
