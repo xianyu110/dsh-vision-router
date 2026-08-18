@@ -4814,7 +4814,7 @@ export function apply(ctx, config = {}) {
       if (toolEnabled()) activateDeepTools()
       // mixed 分路识别（精度优化）：bootstrap 判出混合内容时，按分支注入
       // 引导，避免模型漏判/错判另一半内容；非 mixed / 细分失败时无分支引导。
-      const mixedGuidanceText = renderMixedGuidance(bootstrapState && bootstrapState.mixedPlan)
+      const mixedGuidanceText = renderMixedGuidance(bootstrapState && bootstrapState.mixedPlan, visionDepth())
       // 场景/内容/档位引导：mixed 用分支引导 + 档位句；非 mixed 用场景引导 + 档位句
       // （场景引导按 visual_kind 查表；general 用 content_kind 内容引导——bootstrap 判出；
       //   guidanceOverrides 用户可配置覆盖引导文案）。
@@ -6956,7 +6956,9 @@ ctx.logger?.info(
                         reason: `本轮深度档位为 ${visionDepth()}，深挖调用已达上限 ${limit} 次；请基于已有证据作答`,
                       })
                     }
-                    state.deepCalls = used + 1
+                    // 配额不在调用前预扣：失败调用（ok:false）不烧掉档位的
+                    // 深挖配额——模型保有"至少一次证据调用"提醒并可重试。
+                    // 计数移到 execute 成功后（仅 ok:true 产出证据才 +1）。
                   }
                   let effectiveArgs = args
                   if (
@@ -6980,7 +6982,13 @@ ctx.logger?.info(
                     state.failed !== true &&
                     structuredFollowupEvidenceTools.has(def.name)
                   ) {
-                    state.followupCompleted = true
+                    // 只在实际产出证据（ok:true）后递增配额并标记完成：
+                    // 后端故障/适配器错误（ok:false）不计数、不置完成，
+                    // 模型仍保有提醒并可重试（maintainer review blocking 2）。
+                    if (result && typeof result === 'object' && result.ok === true) {
+                      state.deepCalls = (state.deepCalls || 0) + 1
+                      state.followupCompleted = true
+                    }
                   }
                   return result
                 },

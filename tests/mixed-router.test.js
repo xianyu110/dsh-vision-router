@@ -71,10 +71,29 @@ test('renderMixedGuidance: mixed plan renders per-branch guidance; fallback rend
   assert.equal(renderMixedGuidance(planMixedBranches(undefined)), undefined)
 })
 
+test('renderMixedGuidance: fast degrades two-branch mixed to the primary branch (mixed x depth fix 1)', () => {
+  const plan = planMixedBranches({ visual_kind: 'mixed', mixed_of: ['document', 'ui'] })
+  const fast = renderMixedGuidance(plan, 'fast')
+  // fast 档位与 depthLimitFor('fast')=1 的硬上限一致：只引导主分支一次，
+  // 不再要求"各分支至少一次识别调用"（否则文案 ≥2 次与硬上限 1 次矛盾，
+  // 第二次调用必被 VISION_DEPTH_LIMIT 拒绝）。
+  assert.match(fast, /本轮深度档位为 fast：先验证主分支（ui）一次/)
+  assert.doesNotMatch(fast, /各分支至少一次识别调用/)
+  assert.doesNotMatch(fast, /document：语义优先/) // 次分支引导不注入
+  // standard/deep 保持完整双分支精度引导（与 fast 文案不再冲突）。
+  const standard = renderMixedGuidance(plan, 'standard')
+  assert.match(standard, /各分支至少一次识别调用/)
+  assert.match(standard, /document：语义优先/)
+  const deep = renderMixedGuidance(plan, 'deep')
+  assert.equal(deep, standard)
+  // 默认（无 depth 参数）保持完整双分支——向后兼容。
+  assert.equal(renderMixedGuidance(plan), standard)
+})
+
 test('index.js integration: mixed plan stored on bootstrap completion and injected in followup', () => {
   const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   assert.equal(index.includes("bootstrapState.mixedPlan = planMixedBranches(evidence)"), true)
-  assert.equal(index.includes("renderMixedGuidance(bootstrapState && bootstrapState.mixedPlan)"), true)
+  assert.equal(index.includes("renderMixedGuidance(bootstrapState && bootstrapState.mixedPlan, visionDepth())"), true)
   assert.equal(index.includes("evidence.visual_kind === 'mixed'"), true)
 })
 

@@ -111,6 +111,17 @@ test('index.js integration: visionDepth wired into Config, bootstrap state and t
   assert.equal(index.includes('renderDepthGuidance({'), true)
 })
 
+test('index.js integration: deep quota consumed only after evidence (mixed x depth fix 2)', () => {
+  const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  // Blocking 2 修复：配额不在 execute 前预扣（失败调用不烧档位配额），
+  // 只在工具真正产出证据（result.ok === true）后才递增并标记完成，
+  // 模型因此保有"至少一次证据调用"提醒并可重试。
+  assert.equal(index.includes('state.deepCalls = used + 1'), false) // 预扣已移除
+  assert.equal(index.includes('state.deepCalls = (state.deepCalls || 0) + 1'), true)
+  assert.equal(index.includes("result && typeof result === 'object' && result.ok === true"), true)
+  assert.equal(index.includes('state.followupCompleted = true'), true) // 仍在，但移到成功分支内
+})
+
 test('client.js integration: visionDepth select rendered in Performance group', () => {
   const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.equal(client.includes("const SELECT_KEYS = ['visionDepth']"), true)
