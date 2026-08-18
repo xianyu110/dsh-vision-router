@@ -63,6 +63,15 @@ import {
 import { planMixedBranches, renderMixedGuidance } from './lib/mixed-router.js'
 import { depthLimitFor, renderDepthGuidance } from './lib/depth-guidance.js'
 import { assertNoRepetitionLoop } from './lib/repetition-guard.js'
+import { compareRgbaStreams } from './lib/pixel-diff-stream.js'
+import {
+  boundedOcrTiles,
+  defaultImageResourceGovernor,
+  estimateImageOperationBytes,
+  scaleBox,
+  scaledDimensions,
+} from './lib/image-resource-governor.js'
+import { createSessionVisionStateStore } from './lib/session-vision-state.js'
 
 // sharp is a native module with platform-specific prebuilt binaries. It used
 // to be imported statically, so a missing, broken, or conflicting install
@@ -1156,11 +1165,25 @@ export function boxToSvg(box, width, height) {
 /** Draw one red pixel box onto an image buffer via sharp. */
 export async function annotateBoxBuffer(bytes, box) {
   const sharp = await loadSharp()
-  const image = sharp(bytes, { failOn: 'none' })
-  const meta = await image.metadata()
+  const meta = await sharp(bytes, { failOn: 'none' }).metadata()
   const width = meta.width ?? box.x2
   const height = meta.height ?? box.y2
-  return image.composite([{ input: boxToSvg(box, width, height), top: 0, left: 0 }]).png().toBuffer()
+  const preview = scaledDimensions(width, height, 4_000_000)
+  const displayBox = preview.scale === 1
+    ? box
+    : scaleBox(box, width, height, preview.width, preview.height)
+  return defaultImageResourceGovernor.withBudget(
+    estimateImageOperationBytes('annotation', width, height),
+    {},
+    async () => {
+      let image = sharp(bytes, { failOn: 'none' })
+      if (preview.scale !== 1) image = image.resize(preview.width, preview.height, { fit: 'fill' })
+      return image
+        .composite([{ input: boxToSvg(displayBox, preview.width, preview.height), top: 0, left: 0 }])
+        .png()
+        .toBuffer()
+    },
+  )
 }
 
 /**
@@ -1194,12 +1217,26 @@ export function boxesToSvg(boxes, width, height) {
 /** Draw numbered boxes for a detected-element inventory onto an image buffer. */
 export async function annotateBoxesBuffer(bytes, boxes) {
   const sharp = await loadSharp()
-  const image = sharp(bytes, { failOn: 'none' })
-  const meta = await image.metadata()
+  const meta = await sharp(bytes, { failOn: 'none' }).metadata()
   const width = meta.width ?? 0
   const height = meta.height ?? 0
   if (width <= 0 || height <= 0 || boxes.length === 0) return bytes
-  return image.composite([{ input: boxesToSvg(boxes, width, height), top: 0, left: 0 }]).png().toBuffer()
+  const preview = scaledDimensions(width, height, 4_000_000)
+  const displayBoxes = preview.scale === 1
+    ? boxes
+    : boxes.map((box) => scaleBox(box, width, height, preview.width, preview.height))
+  return defaultImageResourceGovernor.withBudget(
+    estimateImageOperationBytes('annotation', width, height),
+    {},
+    async () => {
+      let image = sharp(bytes, { failOn: 'none' })
+      if (preview.scale !== 1) image = image.resize(preview.width, preview.height, { fit: 'fill' })
+      return image
+        .composite([{ input: boxesToSvg(displayBoxes, preview.width, preview.height), top: 0, left: 0 }])
+        .png()
+        .toBuffer()
+    },
+  )
 }
 
 /**
@@ -1761,21 +1798,46 @@ export async function fullPageHeightOf(page) {
   )
 }
 
-/** Downscale bytes whose intrinsic pixel count exceeds maxPixels; returns original bytes on failure. */
-export async function downscaleImage(bytes, maxPixels) {
+/**
+ * Bound an image to a semantic-processing pixel budget. Metadata probing is
+ * fail-open only until we know the source is oversized. Once oversize is
+ * proven, preprocessing becomes a safety boundary and MUST fail closed.
+ */
+export async function downscaleImage(bytes, maxPixels, options = {}) {
+  let sharp
+  let meta
   try {
-    const sharp = await loadSharp()
-    const image = sharp(bytes, { failOn: 'none' })
-    const meta = await image.metadata()
-    if (!meta.width || !meta.height) return bytes
-    if (meta.width * meta.height <= maxPixels) return bytes
-    const scale = Math.sqrt(maxPixels / (meta.width * meta.height))
-    const width = Math.max(1, Math.round(meta.width * scale))
-    const height = Math.max(1, Math.round(meta.height * scale))
-    const resized = await image.resize({ width, height, fit: 'inside' }).toBuffer()
-    return resized.length > 0 && resized.length < bytes.length ? resized : bytes
+    sharp = await loadSharp()
+    meta = await sharp(bytes, { failOn: 'none' }).metadata()
   } catch {
     return bytes
+  }
+  if (!meta.width || !meta.height) return bytes
+  if (meta.width * meta.height <= maxPixels) return bytes
+  const target = scaledDimensions(meta.width, meta.height, maxPixels)
+  try {
+    return await defaultImageResourceGovernor.withBudget(
+      estimateImageOperationBytes('preview', meta.width, meta.height),
+      { signal: options.signal },
+      async () => {
+        const resized = await sharp(bytes, { failOn: 'none' })
+          .resize({ width: target.width, height: target.height, fit: 'inside' })
+          .toBuffer()
+        if (!resized || resized.length === 0) {
+          throw new Error('image resize produced an empty buffer')
+        }
+        // Pixel count, not compressed byte count, is the execution invariant.
+        // A safe preview may legitimately encode to more bytes than its source.
+        return resized
+      },
+    )
+  } catch (cause) {
+    const error = new Error(
+      'VISION_IMAGE_PREPROCESS_FAILED: oversized image could not be reduced to the safe execution budget',
+    )
+    error.code = 'VISION_IMAGE_PREPROCESS_FAILED'
+    error.cause = cause
+    throw error
   }
 }
 
@@ -2303,14 +2365,10 @@ export function localDescribePrompt(style) {
   )
 }
 
-// 跨轮图片描述记忆（attachmentId -> description）：写入跨轮缓存，同图
-// 后续轮次直接命中、不重复识别。保持 main 的无界语义（见 imageMemorySet）。
+// 跨轮图片描述记忆（attachmentId -> description）：调用方传入当前会话的
+// bounded Map view；同图后续轮次直接命中、不重复识别。这个 helper 本身不再
+// 决定生命周期策略，owner / LRU / text budget 统一由 SessionVisionStateStore 管理。
 export function imageMemorySet(map, id, description) {
-  // Keep main's unbounded memory semantics: a global FIFO cap here would make
-  // long sessions of users who never enabled local vision forget earlier
-  // images (a behavior change outside local-vision scope). If memory bounding
-  // is ever wanted, it must be its own explicit policy, not a side effect of
-  // the local backend merge.
   return map.set(id, description)
 }
 
@@ -2833,9 +2891,21 @@ export function apply(ctx, config = {}) {
   // section once the settings service mounts (installSettingsSection below).
   let current = () => config
   const pairs = () => providersOf(current())
-  // attachmentId -> description captured from a successful vision turn, so
-  // later text turns can replace stripped image blocks with real knowledge.
-  const imageMemory = new Map()
+  // #208: cross-turn visual knowledge belongs to a bounded session owner,
+  // not to the plugin process. The compatibility facade is used only at
+  // adapter boundaries that do not expose a Session; ambiguous attachment ids
+  // deliberately miss instead of crossing conversations.
+  const visionState = createSessionVisionStateStore({
+    maxSessions: 64,
+    idleTtlMs: 60 * 60 * 1000,
+    descriptionMaxEntries: 64,
+    descriptionMaxChars: 256 * 1024,
+    attachmentMaxEntries: 256,
+  })
+  const imageMemory = visionState.descriptionFacade
+  // #208 follow-up complete: session-visible paths use scoped memory; only
+  // session-less adapter boundaries use the ambiguity-safe facade.
+  // #208 large-tool follow-up complete: crop is bounded and presentation is compressed passthrough.
   const timeoutMs = () => {
     const value = current().timeoutMs
     return Number.isFinite(value) && value > 0 ? value : 120000
@@ -4407,10 +4477,8 @@ export function apply(ctx, config = {}) {
     },
     'vision-router: reactive routing mounts',
   )
-  // session -> Map<attachmentId, ref> (uploaded images visible to vision_describe)
-  const sessionAttachments = new WeakMap()
-  // secondary index by session id string (agent.session object identity can change across turns)
-  const sessionAttachmentsById = new Map()
+  // #208: attachment refs, description memory and the event-log cursor are
+  // owned by the same bounded SessionVisionStateStore above.
 
   // ── optional fetch proxy for the vision provider hosts ─────────────────────
   //
@@ -4481,32 +4549,8 @@ export function apply(ctx, config = {}) {
   }
 
   const recordUploadedAttachments = (session, attachments) => {
-    if (!session || !Array.isArray(attachments) || attachments.length === 0) return
-    let map = sessionAttachments.get(session)
-    if (!map) {
-      map = new Map()
-      sessionAttachments.set(session, map)
-    }
-    let byId
-    if (session.id !== undefined) {
-      byId = sessionAttachmentsById.get(String(session.id))
-      if (!byId) {
-        byId = new Map()
-        sessionAttachmentsById.set(String(session.id), byId)
-      }
-    }
-    for (const ref of attachments) {
-      if (ref && ref.attachmentId) {
-        map.set(String(ref.attachmentId), ref)
-        byId?.set(String(ref.attachmentId), ref)
-      }
-    }
+    visionState.recordAttachments(session, attachments)
   }
-
-  // session id -> event-log length already scanned for attachment refs.
-  // Mirrors sessionAttachmentsById: sessions are long-lived objects, and only
-  // the id string survives a process resume, so the index is keyed by id.
-  const scannedSessionEventSeqs = new Map()
 
   /**
    * Index image attachments recorded anywhere in the session event log, not
@@ -4528,43 +4572,40 @@ export function apply(ctx, config = {}) {
       return // not a host Session (or the getter is unavailable): nothing to scan
     }
     if (!Array.isArray(events) || events.length === 0) return
-    const key = session.id !== undefined ? String(session.id) : undefined
-    const last = key !== undefined ? (scannedSessionEventSeqs.get(key) ?? 0) : 0
+    const last = visionState.getScannedEventSeq(session)
     if (last >= events.length) return
     const refs = collectEventAttachmentRefs(events.slice(last))
-    if (key !== undefined) scannedSessionEventSeqs.set(key, events.length)
+    visionState.setScannedEventSeq(session, events.length)
     if (refs.length > 0) recordUploadedAttachments(session, refs)
   }
 
   const lookupAttachment = (session, id) => {
-    const byId = session && session.id !== undefined
-      ? sessionAttachmentsById.get(String(session.id))
-      : undefined
-    if (byId !== undefined) {
-      const hit = byId.get(String(id))
-      if (hit !== undefined) return hit
-    }
-    const map = session ? sessionAttachments.get(session) : undefined
-    const hit = map ? map.get(String(id)) : undefined
+    let hit = visionState.lookupAttachment(session, id)
     if (hit !== undefined) return hit
-    // Miss: fall back to the session event log. Ids announced by the harness
-    // for images it persisted itself (read_image re-uploads) live there even
-    // though they never crossed the inbox-claim stream, so this resolves them
-    // exactly like user-uploaded ids (issue #72). Refs from the log carry
-    // full metadata, so a later attachments.readImage(ref) verifies and
-    // returns the bytes.
+    // Cache eviction is a performance event, never a correctness event. First
+    // consume any newly appended log entries; if the requested ref was older
+    // than the bounded working set, perform a target-only recovery from the
+    // durable session log instead of rebuilding an unbounded index.
     if (session !== undefined) {
       scanSessionEventLog(session)
-      const afterById = session.id !== undefined
-        ? sessionAttachmentsById.get(String(session.id))
-        : undefined
-      if (afterById !== undefined) {
-        const after = afterById.get(String(id))
-        if (after !== undefined) return after
+      hit = visionState.lookupAttachment(session, id)
+      if (hit !== undefined) return hit
+      let events
+      try {
+        events = session.events
+      } catch {
+        events = undefined
       }
-      const afterMap = sessionAttachments.get(session)
-      const afterHit = afterMap ? afterMap.get(String(id)) : undefined
-      if (afterHit !== undefined) return afterHit
+      if (Array.isArray(events) && events.length > 0) {
+        const wanted = String(id)
+        const recovered = collectEventAttachmentRefs(events).find(
+          (ref) => ref && String(ref.attachmentId) === wanted,
+        )
+        if (recovered !== undefined) {
+          visionState.recordAttachments(session, [recovered])
+          return recovered
+        }
+      }
     }
     return undefined
   }
@@ -4712,6 +4753,10 @@ export function apply(ctx, config = {}) {
     if (decision && decision.kind === 'reject') return decision
     const session = payload.agent && payload.agent.session
     if (!session) return decision
+    // #208: every pre-step read/write is scoped to the durable conversation
+    // owner. The global compatibility facade is reserved for adapter stream
+    // boundaries where DSH does not expose a Session object.
+    const sessionImageMemory = visionState.memoryForSession(session)
     // Bind the turn-scoped failure memory for this session+turn: tool calls
     // later in the same turn resolve to the same scope, so an all-backends
     // verdict can short-circuit repeat calls without network attempts.
@@ -4862,7 +4907,7 @@ export function apply(ctx, config = {}) {
           try {
             const instantMap = await buildInstantLocalMap(ctx, messages, localProviders, {
               style: instantLocalStyle(),
-              memory: imageMemory,
+              memory: sessionImageMemory,
               timeoutMs: timeoutMs(),
               downscaleMaxPixels: instantLocalMaxPixels(),
             })
@@ -4923,7 +4968,7 @@ export function apply(ctx, config = {}) {
           const adapterHandlesImages = stealthActive || wrapperRegistered
           const base =
             rewriteEnabled() && !routingEnabled() && !adapterHandlesImages
-              ? rewriteHistoryImages(messages, imageMemory).messages
+              ? rewriteHistoryImages(messages, sessionImageMemory).messages
               : messages
           return {
             ...decision,
@@ -4935,7 +4980,7 @@ export function apply(ctx, config = {}) {
       // route, rewrite uploaded image blocks into attachment markers so the
       // text-only model can still query them via vision_describe.
       if (rewriteEnabled() && !routingEnabled() && !stealthActive && !wrapperRegistered) {
-        const rewrittenHistory = rewriteHistoryImages(messages, imageMemory).messages
+        const rewrittenHistory = rewriteHistoryImages(messages, sessionImageMemory).messages
         return {
           ...decision,
           messages: bootstrapReminder ? [...rewrittenHistory, bootstrapReminder] : rewrittenHistory,
@@ -4952,7 +4997,7 @@ export function apply(ctx, config = {}) {
     // Current-turn images are left untouched above so the vision pass runs.
     if (!hasImage && rewriteEnabled()) {
       const base = messages
-      const cleaned = rewriteHistoryImages(base, imageMemory)
+      const cleaned = rewriteHistoryImages(base, sessionImageMemory)
       if (cleaned.messages !== base || bootstrapReminder) {
         return {
           ...decision,
@@ -5607,7 +5652,8 @@ ctx.logger?.info(
         for (const item of Array.isArray(args.paths) ? args.paths : []) {
           if (isAttachmentIdInput(item)) ids.add(String(item).trim())
         }
-        for (const id of ids) imageMemory.set(id, memory)
+        const scopedMemory = session ? visionState.memoryForSession(session) : imageMemory
+        for (const id of ids) scopedMemory.set(id, memory)
         return JSON.stringify({
           ok: true,
           phase: 'structured-bootstrap',
@@ -6094,7 +6140,8 @@ ctx.logger?.info(
       name: 'vision_crop',
       description:
         'Crop a pixel region (x1,y1,x2,y2 in ORIGINAL pixels) out of an image and write the ' +
-        'result as a PNG artifact for a closer look.',
+        'result as a PNG artifact for a closer look. Very large regions are rendered as a bounded ' +
+        'preview; crop a smaller ORIGINAL-pixel region when tiny details must be preserved.',
       parameters: {
         type: 'object',
         properties: {
@@ -6119,10 +6166,27 @@ ctx.logger?.info(
           throw new Error(`vision_crop: region exceeds image bounds (${width}x${height})`)
         }
         const sharp = await loadSharp()
-        const cropped = await sharp(bytes, { failOn: 'none' })
-          .extract({ left: box.x1, top: box.y1, width: box.x2 - box.x1, height: box.y2 - box.y1 })
-          .png()
-          .toBuffer()
+        const sourceWidth = box.x2 - box.x1
+        const sourceHeight = box.y2 - box.y1
+        const preview = scaledDimensions(sourceWidth, sourceHeight, 4_000_000)
+        const releaseCrop = await defaultImageResourceGovernor.acquire(
+          estimateImageOperationBytes('crop', sourceWidth, sourceHeight),
+        )
+        let cropped
+        try {
+          let pipeline = sharp(bytes, { failOn: 'none' }).extract({
+            left: box.x1,
+            top: box.y1,
+            width: sourceWidth,
+            height: sourceHeight,
+          })
+          if (preview.scale !== 1) {
+            pipeline = pipeline.resize(preview.width, preview.height, { fit: 'fill' })
+          }
+          cropped = await pipeline.png().toBuffer()
+        } finally {
+          releaseCrop()
+        }
         const target = await saveArtifact(
           exec,
           `${artifactStem(args.image, `crop-${box.x1}-${box.y1}-${box.x2}-${box.y2}`)}.png`,
@@ -6131,9 +6195,19 @@ ctx.logger?.info(
         const meta = await sharp(cropped).metadata()
         return JSON.stringify({
           path: target,
-          width: meta.width ?? box.x2 - box.x1,
-          height: meta.height ?? box.y2 - box.y1,
+          width: meta.width ?? preview.width,
+          height: meta.height ?? preview.height,
           bytes: cropped.length,
+          ...(preview.scale !== 1
+            ? {
+                preview: true,
+                sourceRegion: box,
+                sourceWidth,
+                sourceHeight,
+                scale: preview.scale,
+                advice: 'This was a bounded preview of a large crop. Use vision_crop again with a smaller ORIGINAL-pixel region for tiny details.',
+              }
+            : {}),
         })
       },
     })
@@ -6160,17 +6234,22 @@ ctx.logger?.info(
         if (attachments === undefined) {
           throw new Error('vision_present: the durable attachment service is not available in this deployment')
         }
-        const { bytes } = await readImageBytes(exec, args.image)
-        const sharp = await loadSharp()
-        const png = await sharp(bytes, { failOn: 'none' }).png().toBuffer()
+        const { bytes, mediaType } = await readImageBytes(exec, args.image)
+        // Publishing is not a pixel-processing operation. Preserve the already
+        // admitted compressed image instead of decoding/re-encoding a 100MP
+        // JPEG/WebP/GIF into a potentially enormous PNG just to show it.
         const label =
           typeof args.label === 'string' && args.label.trim() !== '' ? args.label.trim().slice(0, 200) : 'image'
-        const target = await saveArtifact(exec, `${artifactStem(args.image, 'present')}.png`, png)
+        const extension =
+          mediaType === 'image/jpeg' ? 'jpg' :
+          mediaType === 'image/webp' ? 'webp' :
+          mediaType === 'image/gif' ? 'gif' : 'png'
+        const target = await saveArtifact(exec, `${artifactStem(args.image, 'present')}.${extension}`, bytes)
         let attachment
         try {
           attachment = await attachments.saveImage({
-            data: png,
-            mediaType: 'image/png',
+            data: bytes,
+            mediaType,
             name: label,
           })
         } catch (error) {
@@ -6216,20 +6295,95 @@ ctx.logger?.info(
         const height = meta.height ?? 0
         if (width <= 0 || height <= 0) throw new Error('vision_pixel_diff: could not read original dimensions')
         const threshold = Number.isFinite(args.threshold) && args.threshold >= 0 ? Math.round(args.threshold) : 16
-        const originalRaw = await sharp(originalBytes, { failOn: 'none' })
-          .ensureAlpha()
-          .raw()
-          .toBuffer({ resolveWithObject: true })
-        const rebuiltRaw = await sharp(rebuiltBytes, { failOn: 'none' })
-          .resize(width, height, { fit: 'fill' })
-          .ensureAlpha()
-          .raw()
-          .toBuffer({ resolveWithObject: true })
-        const diff = computePixelDiff(originalRaw.data, rebuiltRaw.data, threshold, width, height)
-        const heatmap = renderDiffHeatmap(originalRaw.data, diff.mask, width, height)
-        const heatmapPng = await sharp(heatmap, { raw: { width, height, channels: 4 } })
-          .png()
-          .toBuffer()
+        const pixels = width * height
+        let diff
+        let heatmapPng
+        let heatmapPreview = false
+        let heatmapWidth = width
+        let heatmapHeight = height
+        if (pixels <= 4_000_000) {
+          const release = await defaultImageResourceGovernor.acquire(
+            estimateImageOperationBytes('pixel-diff', width, height),
+          )
+          try {
+            const originalRaw = await sharp(originalBytes, { failOn: 'none' })
+              .ensureAlpha()
+              .raw()
+              .toBuffer({ resolveWithObject: true })
+            const rebuiltRaw = await sharp(rebuiltBytes, { failOn: 'none' })
+              .resize(width, height, { fit: 'fill' })
+              .ensureAlpha()
+              .raw()
+              .toBuffer({ resolveWithObject: true })
+            diff = computePixelDiff(originalRaw.data, rebuiltRaw.data, threshold, width, height)
+            const heatmap = renderDiffHeatmap(originalRaw.data, diff.mask, width, height)
+            heatmapPng = await sharp(heatmap, { raw: { width, height, channels: 4 } })
+              .png()
+              .toBuffer()
+          } finally {
+            release()
+          }
+        } else {
+          // Exact large-image metrics are accumulated from streaming RGBA
+          // output. No complete original/rebuilt framebuffer or full-size mask
+          // is retained in JavaScript memory.
+          const release = await defaultImageResourceGovernor.acquire(
+            estimateImageOperationBytes('pixel-diff', width, height),
+            { exclusive: true },
+          )
+          try {
+            const originalStream = sharp(originalBytes, { failOn: 'none' }).ensureAlpha().raw()
+            const rebuiltStream = sharp(rebuiltBytes, { failOn: 'none' })
+              .resize(width, height, { fit: 'fill' })
+              .ensureAlpha()
+              .raw()
+            diff = await compareRgbaStreams(originalStream, rebuiltStream, { width, height, threshold })
+          } finally {
+            release()
+          }
+
+          // The report stays exact, while the visual heatmap is intentionally
+          // bounded. Build it from a <=4MP representation instead of allocating
+          // another 100MP RGBA heatmap just for display.
+          const preview = scaledDimensions(width, height, 4_000_000)
+          heatmapWidth = preview.width
+          heatmapHeight = preview.height
+          heatmapPreview = true
+          const releasePreview = await defaultImageResourceGovernor.acquire(
+            estimateImageOperationBytes('preview', width, height),
+            { exclusive: true },
+          )
+          try {
+            const originalPreview = await sharp(originalBytes, { failOn: 'none' })
+              .resize(preview.width, preview.height, { fit: 'fill' })
+              .ensureAlpha()
+              .raw()
+              .toBuffer({ resolveWithObject: true })
+            const rebuiltPreview = await sharp(rebuiltBytes, { failOn: 'none' })
+              .resize(preview.width, preview.height, { fit: 'fill' })
+              .ensureAlpha()
+              .raw()
+              .toBuffer({ resolveWithObject: true })
+            const previewDiff = computePixelDiff(
+              originalPreview.data,
+              rebuiltPreview.data,
+              threshold,
+              preview.width,
+              preview.height,
+            )
+            const heatmap = renderDiffHeatmap(
+              originalPreview.data,
+              previewDiff.mask,
+              preview.width,
+              preview.height,
+            )
+            heatmapPng = await sharp(heatmap, {
+              raw: { width: preview.width, height: preview.height, channels: 4 },
+            }).png().toBuffer()
+          } finally {
+            releasePreview()
+          }
+        }
         const worst = diff.cells.slice(0, 5).map((cell) => ({
           x1: cell.x1,
           y1: cell.y1,
@@ -6249,6 +6403,7 @@ ctx.logger?.info(
           totalPixels: diff.total,
           diffRatio: Number(diff.ratio.toFixed(4)),
           worstRegions: worst,
+          ...(heatmapPreview ? { heatmapPreview: true, heatmapWidth, heatmapHeight } : {}),
         }
         const stem = artifactStem(args.original, 'diff')
         const heatmapPath = await saveArtifact(exec, `${stem}-heatmap.png`, heatmapPng)
@@ -6399,8 +6554,14 @@ ctx.logger?.info(
             ? Math.min(args.overlap, Math.floor(chunkHeight / 2))
             : 120
         const engine = args.engine === 'tesseract' || args.engine === 'vision' ? args.engine : 'auto'
-        // Overlapping horizontal windows in reading order.
-        const windows = longOcrWindows(height, chunkHeight, overlap)
+        // Cover the entire ORIGINAL image with bounded tiles. Ordinary
+        // long screenshots remain one full-width strip per row; ultra-wide
+        // images split horizontally instead of allocating an oversized strip.
+        const windows = boundedOcrTiles(width, height, {
+          chunkHeight,
+          overlap,
+          maxTilePixels: 4_000_000,
+        })
         const stem = artifactStem(args.image, 'ocr')
         const dir = path.join(workspaceOf(exec), artifactsRel, stem)
         await mkdir(dir, { recursive: true })
@@ -6414,6 +6575,8 @@ ctx.logger?.info(
           if (deadline.expired()) {
             results.push({
               chunk: i + 1,
+              left: windows[i].left,
+              right: windows[i].right,
               top: windows[i].top,
               bottom: windows[i].bottom,
               engine: 'skipped',
@@ -6423,11 +6586,21 @@ ctx.logger?.info(
             })
             continue
           }
-          const { top, bottom } = windows[i]
-          const chunk = await sharp(bytes, { failOn: 'none' })
-            .extract({ left: 0, top, width, height: bottom - top })
-            .png()
-            .toBuffer()
+          const { left, right, top, bottom } = windows[i]
+          const tileWidth = right - left
+          const tileHeight = bottom - top
+          const releaseTile = await defaultImageResourceGovernor.acquire(
+            estimateImageOperationBytes('tile', tileWidth, tileHeight),
+          )
+          let chunk
+          try {
+            chunk = await sharp(bytes, { failOn: 'none' })
+              .extract({ left, top, width: tileWidth, height: tileHeight })
+              .png()
+              .toBuffer()
+          } finally {
+            releaseTile()
+          }
           const chunkRel = `chunk-${String(i + 1).padStart(2, '0')}.png`
           await writeFile(path.join(dir, chunkRel), chunk)
           let text = ''
@@ -6503,7 +6676,7 @@ ctx.logger?.info(
               )
             }
           }
-          results.push({ chunk: i + 1, top, bottom, engine: used, chars: text.length, text })
+          results.push({ chunk: i + 1, left, right, top, bottom, engine: used, chars: text.length, text })
         }
         const joined = results.map((r) => r.text).filter((t) => t !== '').join('\n\n')
         const engines = {}
@@ -6561,8 +6734,9 @@ ctx.logger?.info(
         // grows steeply with pixels — 4MP at 16 levels exceeds 60s on a busy
         // machine, so cap the trace input harder than the general budget.
         let traceBytes = bytes
-        if (downscaleEnabled() && bytes && bytes.length > 0) {
-          traceBytes = await downscaleImage(bytes, Math.min(downscaleMaxPixels(), 1000000))
+        if (bytes && bytes.length > 0) {
+          const traceMaxPixels = Math.min(downscaleEnabled() ? downscaleMaxPixels() : 1_000_000, 1_000_000)
+          traceBytes = await downscaleImage(bytes, traceMaxPixels)
         }
         let svg
         let colorCount = 0
@@ -6611,8 +6785,9 @@ ctx.logger?.info(
         // Same CPU guard as vision_trace: the flood fill is a synchronous
         // pixel walk — cap oversized inputs before it runs.
         let fgBytes = bytes
-        if (downscaleEnabled() && bytes && bytes.length > 0) {
-          fgBytes = await downscaleImage(bytes, downscaleMaxPixels())
+        if (bytes && bytes.length > 0) {
+          const foregroundMaxPixels = Math.min(downscaleEnabled() ? downscaleMaxPixels() : 4_000_000, 4_000_000)
+          fgBytes = await downscaleImage(bytes, foregroundMaxPixels)
         }
         const tolerance = Number.isFinite(args.tolerance) && args.tolerance >= 0 ? Math.round(args.tolerance) : 40
         const sharp = await loadSharp()
