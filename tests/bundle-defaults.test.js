@@ -26,3 +26,8 @@ test('entry contract always exposes the local remote-settings permission', () =>
   assert.equal(Config({}).allowRemoteSettings, false)
   assert.equal(Config({ allowRemoteSettings: true }).allowRemoteSettings, true)
 })
+
+test('post-release development no longer reuses the published 1.6.2 identity', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(pkg.version, '1.6.3')
+})
