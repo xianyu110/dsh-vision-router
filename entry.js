@@ -185,7 +185,9 @@ export function apply(ctx, config = {}) {
   // model already saved under an active provider stays visible as [saved] even
   // when that provider does not enumerate every accepted id. Saved-only rows do
   // NOT alter liveDiscovery.hasModel(), so they cannot authorize a direct
-  // UNKNOWN_MODEL bridge by themselves.
+  // UNKNOWN_MODEL bridge by themselves. The registry also exposes the evidence
+  // source strictly for diagnostics (`known` vs `live`) without changing the
+  // admission decision.
   installVisionModelRegistry(reconciledCtx, liveDiscovery, { config: runtimeConfig })
   // Keep endpoint-discovered ids private to Vision Router's settings client:
   // the prelude wraps this package's browser context rather than changing the
@@ -195,11 +197,14 @@ export function apply(ctx, config = {}) {
   installLiveModelClientPrelude(reconciledCtx)
   // Direct compatibility bridging is allowed only after DSH/pi-ai's exact
   // pre-wire image-capability admission rejection, or a local UNKNOWN_MODEL
-  // that live endpoint discovery independently proved exists. Provider/network/
-  // auth failures remain authoritative and cannot be retried through a second
-  // transport. This private view leaves host settings/adapters untouched.
+  // backed by exact private-registry evidence. Record the same provenance in
+  // the persistent diagnostics log so one image turn clearly shows attempt ->
+  // adapter failure -> direct bridge -> success/fallback. Provider/network/auth
+  // failures remain authoritative and cannot be retried through a second path.
   const executionCtx = contextWithVisionExecutionPolicy(reconciledCtx, {
-    isLiveDiscovered: (provider, model) => liveDiscovery.hasModel(provider, model),
+    isBridgeEvidence: (provider, model) => liveDiscovery.hasModel(provider, model),
+    evidenceSource: (provider, model) => liveDiscovery.evidenceSource?.(provider, model),
+    logger: logging.logger,
   })
   // index.js historically passes image bytes as `options.input` to the async
   // execFile API. That option is not fed into child stdin, so Tesseract waits
