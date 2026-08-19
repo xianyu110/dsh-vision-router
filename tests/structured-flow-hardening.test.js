@@ -281,8 +281,9 @@ test('running structured tool clamps core network/OCR timeouts to remaining turn
     wrapped.tools.register({
       name: 'vision_bootstrap',
       async execute() {
-        // This is exactly what index.js's current() timeout helpers see while
-        // the tool is running through the wrapped Settings scope.
+        // The budget starts when visual work actually begins. Advance inside
+        // the tool to verify the core sees only the remaining visual budget.
+        now += 9_750
         observed = coreScope.get()
         return bootstrapSuccess({ visual_kind: 'general', mixed_of: [] })
       },
@@ -294,7 +295,6 @@ test('running structured tool clamps core network/OCR timeouts to remaining turn
       { turn: 1, agent: { session }, messages: [] },
       async () => ({ kind: 'ok', messages: [] }),
     )
-    now += 9_750
     const result = await defs.get('vision_bootstrap').execute({}, { agent: { session } })
     assert.equal(JSON.parse(result).ok, true)
     assert.ok(observed)
