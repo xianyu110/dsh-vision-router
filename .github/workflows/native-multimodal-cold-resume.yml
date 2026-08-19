@@ -58,6 +58,7 @@ jobs:
               '@deepseek-ai/dsh-anonymous-user-id': v,
               '@deepseek-ai/dsh-llm-deepseek': v,
               '@deepseek-ai/dsh-llm': v,
+              '@deepseek-ai/dsh-llm-pi-ai': v,
               '@deepseek-ai/dsh-session': v,
               '@deepseek-ai/dsh-attachment-local': v,
               '@deepseek-ai/dsh-system-prompt': v,
@@ -68,14 +69,17 @@ jobs:
               sharp: '0.35.3',
             },
           }, null, 2))
-          // Released rc.7's agent stack pulls koffi. pnpm 11 replaced the old
-          // onlyBuiltDependencies setting with allowBuilds; approve only this
-          // exact released native dependency instead of disabling build safety.
+          // Released rc.7's transitive provider stack includes a small set of
+          // packages whose own install scripts pnpm 11 blocks by default.
+          // Approve only those exact released dependencies instead of disabling
+          // build safety for the temporary contract host.
           fs.writeFileSync(path.join(hostDir, 'pnpm-workspace.yaml'), [
             'packages:',
             '  - .',
             'allowBuilds:',
             '  koffi: true',
+            "  '@google/genai': true",
+            '  protobufjs: true',
             '',
           ].join('\n'))
 
@@ -88,6 +92,7 @@ jobs:
           for (const script of [
             'tests/native-multimodal-cold-resume-contract.mjs',
             'tests/native-multimodal-process-restart-contract.mjs',
+            'tests/pi-ai-native-process-restart-contract.mjs',
           ]) {
             const test = spawnSync(
               process.execPath,
