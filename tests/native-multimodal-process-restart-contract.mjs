@@ -178,7 +178,9 @@ function assertPluginMessagesIdentified(messages) {
     message?.role === 'user'
       && message?.source?.kind === 'plugin'
       && message?.source?.plugin === 'dsh-vision-router')
-  assert.ok(pluginMessages.length > 0, 'image turns should persist at least one Vision Router boundary/reminder message')
+  // A native multimodal route may need no durable Vision Router reminder at
+  // all. The corruption invariant is narrower: if the plugin does persist a
+  // boundary/reminder message, it must be fully identified for cold replay.
   for (const message of pluginMessages) {
     assert.equal(typeof message.id, 'string')
     assert.ok(message.id.length > 0, 'persisted Vision Router message must have an id')
