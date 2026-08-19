@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { Config } from '../entry.js'
+import { Config, SETTINGS_CONTRACT_REVISION } from '../entry.js'
 
 const bundlePatch = new URL('../cordis.patch.yml', import.meta.url)
 
@@ -19,4 +19,10 @@ test('public plugin config defaults progressive tools off', () => {
 
 test('progressive tools remain an explicit opt-in', () => {
   assert.equal(Config({ progressiveTools: true }).progressiveTools, true)
+})
+
+test('entry contract always exposes the local remote-settings permission', () => {
+  assert.equal(SETTINGS_CONTRACT_REVISION, 2)
+  assert.equal(Config({}).allowRemoteSettings, false)
+  assert.equal(Config({ allowRemoteSettings: true }).allowRemoteSettings, true)
 })
