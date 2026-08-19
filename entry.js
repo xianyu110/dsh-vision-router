@@ -40,6 +40,19 @@ core.Config.set('progressiveTools', z.boolean().default(false))
 // from multiplying them into several minutes of serial waiting.
 core.Config.set('visionTurnBudgetMs', z.number().step(1000).min(10000).max(600000).default(90000))
 
+// Settings surfaces and Host persistence must agree on this field. Keep the
+// permission on the public entry contract as well as index.js so a packaged
+// build cannot expose the new client toggle while registering an older Host
+// schema that silently recovers from the rejected settings.mutate call. This
+// deliberately repeats the default: entry.js is the final schema authority
+// loaded by Cordis and therefore the right place to close client/Host drift.
+core.Config.set('allowRemoteSettings', z.boolean().default(false))
+
+// Increment whenever the browser-visible settings contract gains a field whose
+// absence changes write semantics. Tests pin this alongside the schema so a
+// future release cannot ship a new client against an indistinguishable Host.
+export const SETTINGS_CONTRACT_REVISION = 2
+
 export * from './index.js'
 export {
   attachmentContextForContract,
