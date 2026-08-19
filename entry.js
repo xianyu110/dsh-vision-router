@@ -12,6 +12,7 @@ import { installVisionRouterFileLogging } from './lib/file-logger.js'
 import { contextWithDelegatedReplay } from './lib/replay-delegation.js'
 import { contextWithVisionExecutionPolicy } from './lib/vision-execution-policy.js'
 import { installLiveModelDiscovery } from './lib/live-model-discovery.js'
+import { installLiveModelClientPrelude } from './lib/live-model-client-prelude.js'
 import { installAdversarialHardening } from './lib/adversarial-hardening.js'
 import { installLocalVisionStabilizer } from './lib/local-vision-stabilizer.js'
 import { installWrapperDirectoryAlias } from './lib/wrapper-directory.js'
@@ -154,6 +155,12 @@ export function apply(ctx, config = {}) {
     config: runtimeConfig,
     logger: logging.logger,
   })
+  // Keep endpoint-discovered ids private to Vision Router's settings client:
+  // the prelude wraps this package's browser context rather than changing the
+  // global llm.models response (which would expose UNKNOWN_MODEL entries in the
+  // ordinary chat model picker). The existing classic client bundle stays the
+  // DSH module-system artifact, including HMR/source-map behavior.
+  installLiveModelClientPrelude(reconciledCtx)
   // Direct compatibility bridging is allowed only after DSH/pi-ai's exact
   // pre-wire image-capability admission rejection, or a local UNKNOWN_MODEL
   // that live endpoint discovery independently proved exists. Provider/network/
