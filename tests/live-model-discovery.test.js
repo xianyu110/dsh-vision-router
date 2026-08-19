@@ -27,14 +27,24 @@ async function waitForProvider(manager, provider, timeoutMs = 1500) {
   throw new Error(`timed out waiting for live provider ${provider}`)
 }
 
-function fakeDiscoveryContext() {
+async function waitForSettled(manager, timeoutMs = 1500) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const snapshot = await manager.snapshot()
+    if (!snapshot.refreshing) return snapshot
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error('timed out waiting for discovery to settle')
+}
+
+function fakeDiscoveryContext({ baseURL = 'https://open.bigmodel.example/api/paas/v4' } = {}) {
   const settings = {
     get(namespace) {
       if (namespace === 'llm-pi-ai') {
         return {
           providers: {
             zai: {
-              baseURL: 'https://open.bigmodel.example/api/paas/v4',
+              baseURL,
               api: 'openai-completions',
               apiKeyEnv: 'ZAI_API_KEY',
             },
@@ -97,7 +107,7 @@ test('route fingerprint changes with endpoint, protocol, or credential fingerpri
   assert.notEqual(routeFingerprint(base), routeFingerprint({ ...base, baseURL: 'https://other.test/v1' }))
 })
 
-test('Host discovery uses configured transport/credential, persists a secret-free stale-while-revalidate cache', async () => {
+test('Host discovery uses configured transport/credential and disk cache is display-only until revalidated', async () => {
   const dshHome = await mkdtemp(path.join(os.tmpdir(), 'vision-router-live-models-'))
   const calls = []
   try {
@@ -122,6 +132,7 @@ test('Host discovery uses configured transport/credential, persists a secret-fre
     await manager.ready()
     manager.queueConfigured()
     const live = await waitForProvider(manager, 'zai')
+    assert.equal(live.stale, false)
     assert.deepEqual(live.models, [
       { id: 'glm-4v-flash', name: 'GLM-4V-Flash' },
       { id: 'glm-4.6v-flash' },
@@ -138,8 +149,6 @@ test('Host discovery uses configured transport/credential, persists a secret-fre
     assert.equal(cacheText.includes('super-secret-live-discovery-key'), false)
     assert.match(cacheText, /glm-4v-flash/)
 
-    // A new process/page gets the last successful list immediately even if the
-    // endpoint is currently unavailable; refresh failure must not blank it.
     const cachedManager = createLiveModelDiscoveryManager(ctx, {
       dshHome,
       timeoutMs: 500,
@@ -148,9 +157,54 @@ test('Host discovery uses configured transport/credential, persists a secret-fre
     await cachedManager.ready()
     const cached = await cachedManager.snapshot()
     assert.equal(cached.providers[0].provider, 'zai')
+    assert.equal(cached.providers[0].stale, true)
     assert.equal(cached.providers[0].models.some((model) => model.id === 'glm-4v-flash'), true)
-    assert.equal(cachedManager.hasModel('zai', 'glm-4v-flash'), true)
+    assert.equal(cachedManager.hasModel('zai', 'glm-4v-flash'), false)
+
+    cachedManager.queueConfigured()
+    await waitForSettled(cachedManager)
+    assert.equal(cachedManager.hasModel('zai', 'glm-4v-flash'), false)
     await cachedManager.dispose()
+  } finally {
+    await rm(dshHome, { recursive: true, force: true })
+  }
+})
+
+test('cache from a different route fingerprint is hidden and never authorizes the new route', async () => {
+  const dshHome = await mkdtemp(path.join(os.tmpdir(), 'vision-router-route-fingerprint-'))
+  try {
+    const first = createLiveModelDiscoveryManager(
+      fakeDiscoveryContext({ baseURL: 'https://first.example/v1' }),
+      {
+        dshHome,
+        fetchImpl: async () => new Response(
+          JSON.stringify({ data: [{ id: 'only-first-route' }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      },
+    )
+    await first.ready()
+    first.queueConfigured()
+    await waitForProvider(first, 'zai')
+    assert.equal(first.hasModel('zai', 'only-first-route'), true)
+    await first.dispose()
+
+    const second = createLiveModelDiscoveryManager(
+      fakeDiscoveryContext({ baseURL: 'https://second.example/v1' }),
+      {
+        dshHome,
+        fetchImpl: async () => { throw new Error('second route offline') },
+      },
+    )
+    await second.ready()
+    assert.equal((await second.snapshot()).providers[0].stale, true)
+    assert.equal(second.hasModel('zai', 'only-first-route'), false)
+
+    second.queueConfigured()
+    const settled = await waitForSettled(second)
+    assert.equal(settled.providers.some((entry) => entry.provider === 'zai'), false)
+    assert.equal(second.hasModel('zai', 'only-first-route'), false)
+    await second.dispose()
   } finally {
     await rm(dshHome, { recursive: true, force: true })
   }
@@ -190,8 +244,6 @@ test('client prelude wraps only Vision Router and appends live-only models witho
     console,
   }
   vm.runInNewContext(LIVE_MODEL_CLIENT_PRELUDE, sandbox)
-  // DSH installs its module loader after index scripts run; the prelude's
-  // setter must catch that assignment without tripping the double-boot guard.
   assert.equal(sandbox.window.__ModuleLoader__, undefined)
   sandbox.window.__ModuleLoader__ = loader
   assert.equal(typeof sandbox.window.__ModuleLoader__.load, 'function')
@@ -201,8 +253,6 @@ test('client prelude wraps only Vision Router and appends live-only models witho
     factory() {
       return {
         async apply(ctx) {
-          // Give the eager cache warm-up microtask a turn, then read the private
-          // catalog view exactly as VisionRouterCard does.
           await new Promise((resolve) => setTimeout(resolve, 0))
           return ctx.get('connection').api.llm.models({})
         },
