@@ -1,6 +1,6 @@
 # Vision Router doctor / repair
 
-Vision Router ships a small standalone diagnostic CLI. It does not need DSH to boot first, so it can still run when DSH exits while parsing a broken profile manifest.
+Vision Router ships a small standalone diagnostic CLI. It does not need DSH to boot first, so it can still run when DSH exits while parsing a broken profile manifest or when an older Vision Router build left one conversation unable to cold-resume.
 
 ## Normal installation stays unchanged
 
@@ -68,3 +68,29 @@ npx dsh-vision-router repair --profile web
 ```
 
 to rewrite them to bare names (`dsh-vision-router`, `@deepseek-ai/*`), which exempt every future version, so upgrades take effect immediately again. Unrelated entries and the rest of the file are left untouched.
+
+## Repair a conversation that only breaks after restarting DSH
+
+A very early Vision Router build briefly persisted the automatic vision-tool mount reminder as a `user/message` without a message `id`. The conversation could keep working in the live process, but after DSH restarted the stricter cold-resume validator could reject that stored event with an error containing:
+
+```text
+lacks an identified message
+```
+
+Current Vision Router builds no longer create that malformed event. To recover an already-affected conversation, **stop DSH first**, then run:
+
+```sh
+npx dsh-vision-router repair-sessions
+```
+
+The repair is intentionally narrow and fail-closed:
+
+- it scans `$DSH_HOME/sessions` for the exact historical Vision Router auto-mount reminder signature only;
+- unrelated malformed messages are not changed;
+- both raw `session.jsonl` and DSH's default checksummed `session.jsonl.zstd` format are supported;
+- unchanged Zstandard frames stay byte-for-byte identical;
+- torn/incomplete logs are refused so DSH can perform its own crash recovery first;
+- the source file identity is checked again immediately before replacement, so a live writer causes the operation to abort instead of racing;
+- every changed log receives a byte-for-byte backup next to the original before replacement, and the repaired log is re-read and verified before success is reported.
+
+After the command reports a repaired session, restart DSH and reopen the conversation. Running `repair-sessions` again is idempotent: already-repaired logs are left untouched.
