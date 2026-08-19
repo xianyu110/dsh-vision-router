@@ -1,7 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -35,4 +43,58 @@ test('doctor CLI prints a report when invoked through a symlinked bin (npx shim 
   assert.match(result.stdout, /DSH home:/)
   assert.match(result.stdout, /✓ web/)
   rmSync(binDir, { recursive: true, force: true })
+})
+
+test('repair-sessions CLI repairs the exact legacy reminder and prints the backup path', () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'dsh-cli-session-repair-'))
+  const sessionDir = path.join(home, 'sessions', '--project--', 'broken-session')
+  mkdirSync(sessionDir, { recursive: true })
+  const sessionPath = path.join(sessionDir, 'session.jsonl')
+  const lines = [
+    JSON.stringify({
+      type: 'session',
+      version: 0,
+      id: 'broken-session',
+      createdAt: 1,
+      delegationDepth: 0,
+    }),
+    JSON.stringify({ type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } }),
+    JSON.stringify({
+      type: 'user/message',
+      seq: 1,
+      time: 2,
+      data: {
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: '视觉深看工具已挂载：vision_describe。现在可以直接调用已启用的工具。',
+        }],
+        source: { kind: 'plugin', plugin: 'dsh-vision-router' },
+      },
+      surfaceOp: 'append',
+    }),
+    JSON.stringify({
+      type: 'turn/end',
+      seq: 2,
+      time: 3,
+      data: { turn: 1, reason: { kind: 'completed' } },
+    }),
+    '',
+  ]
+  writeFileSync(sessionPath, lines.join('\n'))
+
+  const result = spawnSync(process.execPath, [modulePath, 'repair-sessions'], {
+    encoding: 'utf8',
+    env: { ...process.env, DSH_HOME: home },
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /Repaired session broken-session/)
+  assert.match(result.stdout, /backup:/)
+  assert.match(result.stdout, /Restart DSH and reopen the affected conversation/)
+
+  const repaired = readFileSync(sessionPath, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line))
+  assert.equal(repaired[2].data.id, 'vision-router-recovered-auto-mount:broken-session:1')
+  const backupMention = result.stdout.match(/backup: (.+)$/m)?.[1]?.trim()
+  assert.ok(backupMention)
+  assert.equal(existsSync(backupMention), true)
 })
