@@ -12,6 +12,7 @@ import { installVisionRouterFileLogging } from './lib/file-logger.js'
 import { contextWithDelegatedReplay } from './lib/replay-delegation.js'
 import { contextWithVisionExecutionPolicy } from './lib/vision-execution-policy.js'
 import { installLiveModelDiscovery } from './lib/live-model-discovery.js'
+import { installVisionModelRegistry } from './lib/vision-model-registry.js'
 import { installLiveModelClientPrelude } from './lib/live-model-client-prelude.js'
 import { installAdversarialHardening } from './lib/adversarial-hardening.js'
 import { installLocalVisionStabilizer } from './lib/local-vision-stabilizer.js'
@@ -155,6 +156,13 @@ export function apply(ctx, config = {}) {
     config: runtimeConfig,
     logger: logging.logger,
   })
+  // Consolidate the private picker registry without weakening execution
+  // admission. Fresh/stale endpoint models get explicit source labels, while a
+  // model already saved under an active provider stays visible as [saved] even
+  // when that provider does not enumerate every accepted id. Saved-only rows do
+  // NOT alter liveDiscovery.hasModel(), so they cannot authorize a direct
+  // UNKNOWN_MODEL bridge by themselves.
+  installVisionModelRegistry(reconciledCtx, liveDiscovery, { config: runtimeConfig })
   // Keep endpoint-discovered ids private to Vision Router's settings client:
   // the prelude wraps this package's browser context rather than changing the
   // global llm.models response (which would expose UNKNOWN_MODEL entries in the
