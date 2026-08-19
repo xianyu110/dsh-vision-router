@@ -94,8 +94,6 @@ test('repair-sessions CLI repairs the exact legacy reminder and prints the backu
 
   const repaired = readFileSync(sessionPath, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line))
   assert.equal(repaired[2].data.id, 'vision-router-recovered-auto-mount:broken-session:1')
-  const backups = readFileSync(path.dirname(sessionPath), { encoding: 'utf8', flag: 'r' })
-  void backups
   const backupMention = result.stdout.match(/backup: (.+)$/m)?.[1]?.trim()
   assert.ok(backupMention)
   assert.equal(existsSync(backupMention), true)
