@@ -10,6 +10,7 @@ import z from '@deepseek-ai/schemastery'
 import * as core from './index.js'
 import { installVisionRouterFileLogging } from './lib/file-logger.js'
 import { contextWithDelegatedReplay } from './lib/replay-delegation.js'
+import { contextWithReplayEnvelopeV2Compat } from './lib/replay-envelope-v2-compat.js'
 import { contextWithVisionExecutionPolicy } from './lib/vision-execution-policy.js'
 import { installLiveModelDiscovery } from './lib/live-model-discovery.js'
 import { installVisionModelRegistry } from './lib/vision-model-registry.js'
@@ -97,13 +98,19 @@ export function apply(ctx, config = {}) {
   // every injection callback the original child context identity unchanged.
   const localMutationCtx = installLocalMutationRouteBoundary(ctx)
   const logging = installVisionRouterFileLogging(localMutationCtx)
-  const runtimeCtx = contextWithDelegatedReplay(logging.ctx, {
+  const delegatedReplayCtx = contextWithDelegatedReplay(logging.ctx, {
     wrapperRoute:
       typeof config.wrapperRoute === 'string' && config.wrapperRoute !== ''
         ? config.wrapperRoute
         : 'deepseek-vision',
     visionConfig: config,
   })
+  // DSH rc.7 pi-ai replay v2 stores the real producer under
+  // replayState.response.{provider,model}; the older delegated-replay shim
+  // recognizes the pre-v2 top-level shape. Layer a narrow private compatibility
+  // view so resumed wrapper history keeps provider-native replay metadata rather
+  // than degrading to foreign history at the delegate boundary.
+  const runtimeCtx = contextWithReplayEnvelopeV2Compat(delegatedReplayCtx)
   // Filesystem authority is separate from browser rendering safety. Put this
   // boundary INSIDE adversarial hardening so the secure HTML renderer that the
   // outer layer installs is itself wrapped by canonical workspace containment.

@@ -68,14 +68,42 @@ function unique(values) {
   return [...new Set(values)]
 }
 
+function piReplayState() {
+  return {
+    response: {
+      kind: 'pi-ai',
+      version: 2,
+      api: 'openai-completions',
+      provider: 'native-mm',
+      model: 'mm',
+      stopReason: 'stop',
+    },
+    blocks: [{ type: 'text' }],
+  }
+}
+
 function responseChunks(text) {
   return [
     { type: 'block-start', index: 0, blockType: 'text' },
     { type: 'text-delta', index: 0, text },
     { type: 'block-end', index: 0, block: { type: 'text', text } },
     { type: 'usage', usage: { inputTokens: 10, outputTokens: 2 } },
-    { type: 'finish', reason: { kind: 'stop' } },
+    { type: 'finish', reason: { kind: 'stop' }, replayState: piReplayState() },
   ]
+}
+
+function assertDelegateReplayIdentity(messages) {
+  for (const message of messages ?? []) {
+    if (message?.role !== 'assistant' || message?.source?.kind !== 'model') continue
+    const response = message.source.replayState?.response
+    if (response?.kind !== 'pi-ai' || response?.version !== 2) continue
+    assert.equal(
+      message.source.provider,
+      response.provider,
+      `delegate received wrapper source ${String(message.source.provider)} for replay owned by ${String(response.provider)}`,
+    )
+    assert.equal(message.source.model, response.model)
+  }
 }
 
 class NativeMultimodalAdapter extends LlmAdapter {
@@ -108,6 +136,12 @@ class NativeMultimodalAdapter extends LlmAdapter {
   }
 
   async *stream(options) {
+    // Model adapters such as DSH pi-ai validate durable replay metadata against
+    // the source identity they receive. A Vision Router twin persists its
+    // public route in assistant source.provider, so the plugin must rebind that
+    // source to the real delegate provider at request time without mutating the
+    // durable session. rc.7 stores that proof under replayState.response.
+    assertDelegateReplayIdentity(options.messages)
     this.requests.push(options)
     for (const chunk of responseChunks(`${this.label}-${this.requests.length}`)) yield chunk
   }
@@ -169,6 +203,10 @@ async function textTurn(agent, text) {
   assert.equal(end?.data?.reason?.kind, 'completed', `text turn did not complete: ${JSON.stringify(end?.data?.reason)}`)
 }
 
+function replayAssistants(messages) {
+  return messages.filter((message) => message?.role === 'assistant' && message?.source?.replayState?.response?.kind === 'pi-ai')
+}
+
 const root = await mkdtemp(path.join(tmpdir(), 'vision-router-native-cold-resume-'))
 const dshHome = path.join(root, 'dsh-home')
 const sessionsRoot = path.join(dshHome, 'sessions')
@@ -205,10 +243,16 @@ try {
     refs.map((ref) => String(ref.attachmentId)).sort(),
     'native multimodal delegation must keep original durable image blocks before restart',
   )
+  const durableBefore = firstHandle.agent.session.deriveMessages()
   assert.deepEqual(
-    unique(imageIdsInMessages(firstHandle.agent.session.deriveMessages())).sort(),
+    unique(imageIdsInMessages(durableBefore)).sort(),
     refs.map((ref) => String(ref.attachmentId)).sort(),
     'the durable session surface must retain both uploaded image refs',
+  )
+  assert.ok(replayAssistants(durableBefore).length >= 2, 'fixture must persist replay-bearing assistant history')
+  assert.ok(
+    replayAssistants(durableBefore).every((message) => message.source.provider === 'native-mm-vision'),
+    'request-time replay rebinding must not mutate the durable public wrapper identity',
   )
   const persistedRoute = firstHandle.agent.session.requestHeader()?.config
   assert.equal(persistedRoute?.provider, 'native-mm-vision')
@@ -234,10 +278,15 @@ try {
     // request/header before calling resume. Exercise that same route here.
     agentOptions: { provider: persistedRoute.provider, model: persistedRoute.model },
   })
+  const durableAfter = secondHandle.agent.session.deriveMessages()
   assert.deepEqual(
-    unique(imageIdsInMessages(secondHandle.agent.session.deriveMessages())).sort(),
+    unique(imageIdsInMessages(durableAfter)).sort(),
     refs.map((ref) => String(ref.attachmentId)).sort(),
     'cold resume must reconstruct the same image-bearing conversation surface',
+  )
+  assert.ok(
+    replayAssistants(durableAfter).every((message) => message.source.provider === 'native-mm-vision'),
+    'cold restore must keep durable replay messages attributed to the public twin',
   )
 
   await textTurn(secondHandle.agent, 'continue after a full DSH restart')
@@ -248,6 +297,7 @@ try {
     refs.map((ref) => String(ref.attachmentId)).sort(),
     'the first post-restart model call must still receive historical native image blocks',
   )
+  assertDelegateReplayIdentity(secondAdapter.requests[0].messages)
 
   await imageTurn(secondHandle.agent, [refs[0]], 'new image turn after restart')
   assert.equal(secondAdapter.requests.length, 2)
@@ -255,12 +305,13 @@ try {
     imageIdsInMessages(secondAdapter.requests[1].messages).includes(String(refs[0].attachmentId)),
     'a new image turn must remain usable after cold resume',
   )
+  assertDelegateReplayIdentity(secondAdapter.requests[1].messages)
 
   await secondCtx.sessions.flush(secondHandle.agent.session)
   await secondHandle.dispose()
   await secondCtx.fiber.dispose()
 
-  console.log('native multimodal cold-resume contract: OK')
+  console.log('native multimodal cold-resume + replay-v2 contract: OK')
 } finally {
   if (previousDshHome === undefined) delete process.env.DSH_HOME
   else process.env.DSH_HOME = previousDshHome
