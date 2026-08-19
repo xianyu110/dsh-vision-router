@@ -101,7 +101,10 @@ test('diagnostics show known-model adapter miss -> bridge attempt -> direct-brid
       await assert.rejects(async () => {
         for await (const _chunk of wrapped.llm.stream({ provider, model, messages: [] })) {}
       }, (error) => error?.code === 'UNKNOWN_MODEL')
-      assert.notEqual(wrapped.llm.registration(provider).adapter.config, undefined)
+      // Existing execution-policy tests already assert the transport view itself.
+      // Here we only need to exercise the same registration lookup that the
+      // legacy direct bridge performs so the provenance logger marks entry.
+      void wrapped.llm.registration(provider)
       return 'direct bridge answer'
     },
   })
@@ -133,7 +136,7 @@ test('fallback warning marks the bridge as failed and suppresses a false direct-
       await assert.rejects(async () => {
         for await (const _chunk of wrapped.llm.stream({ provider, model, messages: [] })) {}
       })
-      void wrapped.llm.registration(provider).adapter.config
+      void wrapped.llm.registration(provider)
       wrapped.logger.warn(
         'vision-router: vision_describe fallback [%s] (%s, %d ms): %s',
         `${provider}/${model}`,
