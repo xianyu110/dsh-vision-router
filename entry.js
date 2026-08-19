@@ -10,6 +10,7 @@ import z from '@deepseek-ai/schemastery'
 import * as core from './index.js'
 import { installVisionRouterFileLogging } from './lib/file-logger.js'
 import { contextWithDelegatedReplay } from './lib/replay-delegation.js'
+import { contextWithVisionExecutionPolicy } from './lib/vision-execution-policy.js'
 import { installAdversarialHardening } from './lib/adversarial-hardening.js'
 import { installLocalVisionStabilizer } from './lib/local-vision-stabilizer.js'
 import { installWrapperDirectoryAlias } from './lib/wrapper-directory.js'
@@ -144,12 +145,17 @@ export function apply(ctx, config = {}) {
   // mark the topology dirty and the outer pass reruns to a fixed point, so we
   // neither double-register a twin nor lose a provider added mid-pass.
   const reconciledCtx = contextWithCoalescedAdapterUpdates(structuredCtx)
+  // Direct compatibility bridging is allowed only after DSH/pi-ai's exact
+  // pre-wire image-capability admission rejection. Provider/network/auth
+  // failures remain authoritative and cannot be retried through a second
+  // transport. This private view also leaves host settings/adapters untouched.
+  const executionCtx = contextWithVisionExecutionPolicy(reconciledCtx)
   // index.js historically passes image bytes as `options.input` to the async
   // execFile API. That option is not fed into child stdin, so Tesseract waits
   // for data until the OCR slice expires. Materialize only this exact
   // Tesseract-stdin call to a temporary image file; all other execFile calls
   // keep their native behavior.
-  installTesseractExecFileCompat(reconciledCtx)
+  installTesseractExecFileCompat(executionCtx)
 
   // 启动诊断摘要只描述 composition/apply 的基础配置。设置服务可能稍后
   // 覆盖这些值；每个图片轮还会记录 current() 的实时决策，避免把这个
@@ -170,7 +176,7 @@ export function apply(ctx, config = {}) {
     /* diagnostics must never break apply */
   }
   try {
-    const result = core.apply(reconciledCtx, runtimeConfig)
+    const result = core.apply(executionCtx, runtimeConfig)
     // DSH rc.7's Settings -> Models surface is backed by the configurable
     // provider directory, not by the live adapter registry alone. Publish the
     // main DeepSeek + 自动识图 route as a derived alias of official DeepSeek so
