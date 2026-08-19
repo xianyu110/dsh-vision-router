@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { format } from 'node:util'
 
 import { contextWithVisionExecutionPolicy } from '../lib/vision-execution-policy.js'
 import { installVisionModelRegistry } from '../lib/vision-model-registry.js'
@@ -8,7 +9,7 @@ function captureLogger() {
   const entries = []
   const logger = {}
   for (const level of ['debug', 'info', 'warn', 'error']) {
-    logger[level] = (...args) => entries.push({ level, args, text: args.map(String).join(' ') })
+    logger[level] = (...args) => entries.push({ level, args, text: format(...args) })
   }
   return { logger, entries }
 }
