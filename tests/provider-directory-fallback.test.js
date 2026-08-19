@@ -10,6 +10,10 @@ function rpc(value) {
   return { rpcId: 'test', result: { ok: true, value } }
 }
 
+function modelIds(group) {
+  return Array.from(group.models, (model) => model.id)
+}
+
 function createHarness({ providerDirectoryFails = false, withDocument = false } = {}) {
   let captured
   const loader = { load(spec) { captured = spec } }
@@ -151,7 +155,7 @@ test('Vision Router uses active llm.providers as the provider directory when llm
   const openrouter = groups.find((group) => group.id === 'openrouter')
   assert.equal(openrouter.name, 'OpenRouter')
   assert.equal(openrouter.visionRouterProviderDirectory, true)
-  assert.deepEqual(openrouter.models.map((model) => model.id), [MANUAL_MODEL_ID])
+  assert.deepEqual(modelIds(openrouter), [MANUAL_MODEL_ID])
   assert.match(openrouter.models[0].name, /手动输入模型 ID|Enter model ID/)
   assert.equal(groups.some((group) => group.id === 'dormant-provider'), false)
   assert.deepEqual(harness.calls(), { modelCalls: 1, providerCalls: 1 })
@@ -174,7 +178,7 @@ test('manual model entry becomes a real catalog id before the controlled selecto
   const harness = createHarness({ withDocument: true })
   const first = await harness.exported.apply(harness.ctx)
   const openrouter = catalogGroups(first).find((group) => group.id === 'openrouter')
-  assert.deepEqual(openrouter.models.map((model) => model.id), [MANUAL_MODEL_ID])
+  assert.deepEqual(modelIds(openrouter), [MANUAL_MODEL_ID])
   assert.equal(harness.changeListeners.length, 1)
   assert.equal(harness.changeListeners[0].capture, true)
 
@@ -208,7 +212,7 @@ test('manual model entry becomes a real catalog id before the controlled selecto
   // next load; it never alters DSH's global llm.models response.
   const second = await harness.exported.modelCatalog()
   const secondOpenrouter = catalogGroups(second).find((group) => group.id === 'openrouter')
-  assert.deepEqual(secondOpenrouter.models.map((model) => model.id), [
+  assert.deepEqual(modelIds(secondOpenrouter), [
     'vendor/new-vision-model',
     MANUAL_MODEL_ID,
   ])
