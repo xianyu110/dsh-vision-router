@@ -5,11 +5,17 @@ import {
   bridgeDispositionForFailure,
   contextWithVisionExecutionPolicy,
   isLocalImageCapabilityAdmissionFailure,
+  isLocalUnknownModelFailure,
 } from '../lib/vision-execution-policy.js'
 
 const localAdmission = (model = 'doubao-seed-2-1-turbo-260628') => ({
   message: `pi-ai model "${model}" does not support image input`,
   code: 'UNSUPPORTED_CONTENT',
+})
+
+const unknownModel = (provider = 'doubao', model = 'seed-live-only') => ({
+  message: `pi-ai provider "${provider}" has no configured model "${model}"`,
+  code: 'UNKNOWN_MODEL',
 })
 
 test('only the exact pi-ai pre-wire image-capability rejection authorizes a bridge', () => {
@@ -38,6 +44,13 @@ test('only the exact pi-ai pre-wire image-capability rejection authorizes a brid
   )
   assert.equal(bridgeDispositionForFailure(localAdmission()), 'allow')
   assert.equal(bridgeDispositionForFailure({ message: 'fetch failed', code: 'NETWORK' }), 'deny')
+})
+
+test('UNKNOWN_MODEL recognition is exact and does not trust provider-side errors', () => {
+  assert.equal(isLocalUnknownModelFailure(unknownModel(), 'doubao', 'seed-live-only'), true)
+  assert.equal(isLocalUnknownModelFailure({ ...unknownModel(), status: 404 }, 'doubao', 'seed-live-only'), false)
+  assert.equal(isLocalUnknownModelFailure(unknownModel('other', 'seed-live-only'), 'doubao', 'seed-live-only'), false)
+  assert.equal(isLocalUnknownModelFailure({ message: 'unknown model', code: 'UNKNOWN_MODEL' }, 'doubao', 'seed-live-only'), false)
 })
 
 function fakeContext(streamFactory) {
@@ -139,6 +152,34 @@ test('the exact local image admission failure keeps bridge transport visible', a
   })
   const result = await fixture.getRegistered().execute()
   assert.deepEqual(result, { privateConfigVisible: true, rawProviderVisible: true })
+})
+
+test('live endpoint evidence authorizes only the exact local UNKNOWN_MODEL pair', async () => {
+  const fixture = fakeContext(() => terminalFailureStream(unknownModel()))
+  const denied = contextWithVisionExecutionPolicy(fixture.ctx, {
+    isLiveDiscovered: () => false,
+  })
+  denied.tools.register({
+    name: 'vision_describe',
+    async execute() {
+      for await (const _chunk of denied.llm.stream({ provider: 'doubao', model: 'seed-live-only', messages: [] })) {}
+      return denied.llm.registration('doubao').adapter.config !== undefined
+    },
+  })
+  assert.equal(await fixture.getRegistered().execute(), false)
+
+  const fixtureAllowed = fakeContext(() => terminalFailureStream(unknownModel()))
+  const allowed = contextWithVisionExecutionPolicy(fixtureAllowed.ctx, {
+    isLiveDiscovered: (provider, model) => provider === 'doubao' && model === 'seed-live-only',
+  })
+  allowed.tools.register({
+    name: 'vision_describe',
+    async execute() {
+      for await (const _chunk of allowed.llm.stream({ provider: 'doubao', model: 'seed-live-only', messages: [] })) {}
+      return allowed.llm.registration('doubao').adapter.config !== undefined
+    },
+  })
+  assert.equal(await fixtureAllowed.getRegistered().execute(), true)
 })
 
 test('policy state is isolated to vision tool execution and reset by the next adapter attempt', async () => {
