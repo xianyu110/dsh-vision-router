@@ -24,7 +24,8 @@ function fakeContext({ visionSettings, active = [] } = {}) {
       },
       llm: {
         registration(provider) {
-          return activeSet.has(provider) ? { provider: { id: provider } } : undefined
+          if (!activeSet.has(provider)) throw new Error(`unknown provider: ${provider}`)
+          return { provider: { id: provider } }
         },
       },
       effect(factory) {
@@ -175,7 +176,6 @@ test('installVisionModelRegistry patches snapshot only and restores it on dispos
       return provider === 'zhipu' && model === 'live-only'
     },
   }
-  const originalSnapshot = manager.snapshot
   installVisionModelRegistry(ctx, manager)
 
   const decorated = await manager.snapshot({ schedule: false })
@@ -187,7 +187,7 @@ test('installVisionModelRegistry patches snapshot only and restores it on dispos
 
   assert.equal(typeof effects[0], 'function')
   effects[0]()
-  assert.notEqual(manager.snapshot, originalSnapshot)
+  assert.equal(manager.snapshot.__visionRouterRegistry, undefined)
   const raw = await manager.snapshot()
   assert.deepEqual(raw, { ok: true, version: 1, refreshing: false, providers: [] })
 })
