@@ -58,6 +58,7 @@ jobs:
               '@deepseek-ai/dsh-anonymous-user-id': v,
               '@deepseek-ai/dsh-llm-deepseek': v,
               '@deepseek-ai/dsh-llm': v,
+              '@deepseek-ai/dsh-llm-pi-ai': v,
               '@deepseek-ai/dsh-session': v,
               '@deepseek-ai/dsh-attachment-local': v,
               '@deepseek-ai/dsh-system-prompt': v,
@@ -88,6 +89,7 @@ jobs:
           for (const script of [
             'tests/native-multimodal-cold-resume-contract.mjs',
             'tests/native-multimodal-process-restart-contract.mjs',
+            'tests/pi-ai-native-process-restart-contract.mjs',
           ]) {
             const test = spawnSync(
               process.execPath,
