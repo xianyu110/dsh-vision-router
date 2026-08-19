@@ -68,6 +68,17 @@ jobs:
               sharp: '0.35.3',
             },
           }, null, 2))
+          // Released rc.7's agent stack pulls koffi. pnpm v11 blocks native
+          // install scripts unless the exact dependency is allow-listed in the
+          // workspace settings; keep this test host as strict as a real DSH
+          // profile while allowing only that released native dependency.
+          fs.writeFileSync(path.join(hostDir, 'pnpm-workspace.yaml'), [
+            'packages:',
+            '  - .',
+            'onlyBuiltDependencies:',
+            '  - koffi',
+            '',
+          ].join('\n'))
 
           const installed = spawnSync('pnpm', ['install'], {
             cwd: hostDir,
