@@ -16,6 +16,7 @@ import { installLiveModelDiscovery } from './lib/live-model-discovery.js'
 import { installVisionModelRegistry } from './lib/vision-model-registry.js'
 import { installLiveModelClientPrelude } from './lib/live-model-client-prelude.js'
 import { installAdversarialHardening } from './lib/adversarial-hardening.js'
+import { installOllamaColdStartGuard } from './lib/ollama-cold-start.js'
 import { installLocalVisionStabilizer } from './lib/local-vision-stabilizer.js'
 import { installWrapperDirectoryAlias } from './lib/wrapper-directory.js'
 import { installAndroidAttachmentCompat } from './lib/android-attachment-compat.js'
@@ -124,13 +125,19 @@ export function apply(ctx, config = {}) {
     config,
     core,
   )
+  // Ollama's native API can preload a model independently of an actual vision
+  // inference. Install this boundary before the local-vision stabilizer so the
+  // final local vision-http adapter is observed after stabilization. Primary
+  // local-Ollama image turns finish a cold model load in pre-step, before the
+  // 45s vision-task budget begins; fallback Ollama warms in the background.
+  const ollamaColdStartCtx = installOllamaColdStartGuard(hardenedCtx, hardenedConfig, core)
   // #141 stabilization boundary: keep the recently merged local-vision
   // behavior isolated from main's existing provider/router semantics. It
   // normalizes only the local settings/runtime seams before core.apply sees
   // the context (desktop screenshot exposure, instant-local budget/one-pass,
   // local vision-http transport and connection-probe fallback).
   const { ctx: stabilizedCtx, bootConfig } = installLocalVisionStabilizer(
-    hardenedCtx,
+    ollamaColdStartCtx,
     hardenedConfig,
     core,
   )
