@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { Config as EntryConfig, SETTINGS_CONTRACT_REVISION } from '../entry.js'
 import {
   attachmentContextForContract,
   installRc7SettingsCompatibility,
@@ -106,6 +107,36 @@ test('rc7 settings bridge uses the common public SettingsProvider seam and masks
   assert.deepEqual(observed, { foo: 'changed', stealth: false })
   cleanup()
   assert.equal(serviceWatcher, undefined)
+})
+
+test('rc7 registers the final entry settings contract including remote permission', () => {
+  let registeredConfig
+  const scope = { get() { return EntryConfig({}) }, watch() { return () => {} } }
+  const ctx = {
+    inject(dependencies, callback) {
+      assert.deepEqual(dependencies, ['settings'])
+      callback({
+        settings: {
+          register(namespace, Config) {
+            assert.equal(namespace, 'vision-router')
+            registeredConfig = Config
+            return scope
+          },
+        },
+        effect(factory) { factory() },
+      })
+    },
+  }
+
+  installRc7SettingsCompatibility(ctx, {}, {
+    Config: EntryConfig,
+    namespace: 'vision-router',
+  })
+
+  assert.equal(SETTINGS_CONTRACT_REVISION, 2)
+  assert.equal(registeredConfig, EntryConfig)
+  assert.equal(registeredConfig({}).allowRemoteSettings, false)
+  assert.equal(registeredConfig({ allowRemoteSettings: true }).allowRemoteSettings, true)
 })
 
 test('attachment compatibility remains rc6-only and rc7 keeps host-owned refs', () => {
