@@ -118,7 +118,7 @@ test('diagnostics show known-model adapter miss -> bridge attempt -> direct-brid
   assert.equal(lines.some((line) => line.includes(`vision backend success [${provider}/${model}] via=direct-bridge`) && line.includes('source=known')), true)
 })
 
-test('fallback warning marks the bridge as failed and suppresses a false direct-bridge success', async () => {
+test('exact bridge failure persists its kind/detail and later HTTP fallback is not misattributed', async () => {
   const provider = 'zhipu-glm'
   const model = 'glm-4.6v-flash'
   const fixture = diagnosticFixture({
@@ -141,9 +141,16 @@ test('fallback warning marks the bridge as failed and suppresses a false direct-
       wrapped.logger.warn(
         'vision-router: vision_describe fallback [%s] (%s, %d ms): %s',
         `${provider}/${model}`,
-        'other',
-        1,
-        'bridge request failed',
+        'auth',
+        167,
+        '401: {"error":"invalid api key"}',
+      )
+      wrapped.logger.warn(
+        'vision-router: vision_describe http fallback [%s] (%s, %d ms): %s',
+        'http:ovh/Qwen2.5-VL-72B-Instruct',
+        'rate_limit',
+        2900,
+        '429: too many requests',
       )
       return 'fallback answer'
     },
@@ -151,7 +158,12 @@ test('fallback warning marks the bridge as failed and suppresses a false direct-
 
   assert.equal(await fixture.getRegistered().execute(), 'fallback answer')
   const lines = messages(fixture.entries)
-  assert.equal(lines.some((line) => line.includes(`vision bridge fallback [${provider}/${model}]`)), true)
+  const bridgeFailures = lines.filter((line) => line.includes(`vision bridge failed [${provider}/${model}]`))
+  assert.equal(bridgeFailures.length, 1)
+  assert.equal(bridgeFailures[0].includes('source=known'), true)
+  assert.equal(bridgeFailures[0].includes('kind=auth'), true)
+  assert.equal(bridgeFailures[0].includes('401:'), true)
+  assert.equal(bridgeFailures[0].includes('429:'), false)
   assert.equal(lines.some((line) => line.includes(`vision backend success [${provider}/${model}] via=direct-bridge`)), false)
 })
 
