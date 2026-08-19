@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   bridgeDispositionForFailure,
+  bridgeDispositionForObservedFailure,
   contextWithVisionExecutionPolicy,
   isLocalImageCapabilityAdmissionFailure,
   isLocalUnknownModelFailure,
@@ -51,6 +52,27 @@ test('UNKNOWN_MODEL recognition is exact and does not trust provider-side errors
   assert.equal(isLocalUnknownModelFailure({ ...unknownModel(), status: 404 }, 'doubao', 'seed-live-only'), false)
   assert.equal(isLocalUnknownModelFailure(unknownModel('other', 'seed-live-only'), 'doubao', 'seed-live-only'), false)
   assert.equal(isLocalUnknownModelFailure({ message: 'unknown model', code: 'UNKNOWN_MODEL' }, 'doubao', 'seed-live-only'), false)
+})
+
+test('observed failure classification admits UNKNOWN_MODEL only with exact bridge evidence', () => {
+  assert.equal(
+    bridgeDispositionForObservedFailure(
+      unknownModel('zhipu-glm', 'glm-4.6v-flash'),
+      'zhipu-glm',
+      'glm-4.6v-flash',
+      (provider, model) => provider === 'zhipu-glm' && model === 'glm-4.6v-flash',
+    ),
+    'allow',
+  )
+  assert.equal(
+    bridgeDispositionForObservedFailure(
+      unknownModel('zhipu-glm', 'glm-4.6v-flash'),
+      'zhipu-glm',
+      'glm-4.6v-flash',
+      () => false,
+    ),
+    'deny',
+  )
 })
 
 function fakeContext(streamFactory) {
@@ -103,6 +125,12 @@ function fakeContext(streamFactory) {
 function terminalFailureStream(failure) {
   return (async function* () {
     yield { type: 'finish', reason: { kind: 'error', failure } }
+  })()
+}
+
+function thrownFailureStream(failure) {
+  return (async function* () {
+    throw Object.assign(new Error(failure.message), failure)
   })()
 }
 
@@ -180,6 +208,102 @@ test('live endpoint evidence authorizes only the exact local UNKNOWN_MODEL pair'
     },
   })
   assert.equal(await fixtureAllowed.getRegistered().execute(), true)
+})
+
+test('thrown UNKNOWN_MODEL keeps bridge transport visible only with trusted evidence', async () => {
+  const failure = unknownModel('doubao', 'seed-live-only')
+  const deniedFixture = fakeContext(() => thrownFailureStream(failure))
+  const denied = contextWithVisionExecutionPolicy(deniedFixture.ctx, {
+    isBridgeEvidence: () => false,
+  })
+  denied.tools.register({
+    name: 'vision_describe',
+    async execute() {
+      await assert.rejects(async () => {
+        for await (const _chunk of denied.llm.stream({ provider: 'doubao', model: 'seed-live-only', messages: [] })) {}
+      }, (error) => error?.code === 'UNKNOWN_MODEL')
+      return denied.llm.registration('doubao').adapter.config !== undefined
+    },
+  })
+  assert.equal(await deniedFixture.getRegistered().execute(), false)
+
+  const allowedFixture = fakeContext(() => thrownFailureStream(failure))
+  const allowed = contextWithVisionExecutionPolicy(allowedFixture.ctx, {
+    isBridgeEvidence: (provider, model) => provider === 'doubao' && model === 'seed-live-only',
+  })
+  allowed.tools.register({
+    name: 'vision_describe',
+    async execute() {
+      await assert.rejects(async () => {
+        for await (const _chunk of allowed.llm.stream({ provider: 'doubao', model: 'seed-live-only', messages: [] })) {}
+      }, (error) => error?.code === 'UNKNOWN_MODEL')
+      return {
+        privateConfigVisible: allowed.llm.registration('doubao').adapter.config !== undefined,
+        rawProviderVisible: allowed.get('settings').get('llm-pi-ai').providers.doubao !== undefined,
+      }
+    },
+  })
+  assert.deepEqual(await allowedFixture.getRegistered().execute(), {
+    privateConfigVisible: true,
+    rawProviderVisible: true,
+  })
+})
+
+test('thrown exact local image admission still authorizes the compatibility bridge', async () => {
+  const fixture = fakeContext(() => thrownFailureStream(localAdmission('seed')))
+  const wrapped = contextWithVisionExecutionPolicy(fixture.ctx)
+  wrapped.tools.register({
+    name: 'vision_describe',
+    async execute() {
+      await assert.rejects(async () => {
+        for await (const _chunk of wrapped.llm.stream({ provider: 'doubao', model: 'seed', messages: [] })) {}
+      }, (error) => error?.code === 'UNSUPPORTED_CONTENT')
+      return wrapped.llm.registration('doubao').adapter.config !== undefined
+    },
+  })
+  assert.equal(await fixture.getRegistered().execute(), true)
+})
+
+test('thrown provider-side errors remain fail-closed and cannot trigger a second transport', async () => {
+  const failure = {
+    message: 'provider returned 400 invalid_request',
+    code: 'INVALID_REQUEST',
+    status: 400,
+  }
+  const fixture = fakeContext(() => thrownFailureStream(failure))
+  const wrapped = contextWithVisionExecutionPolicy(fixture.ctx, {
+    isBridgeEvidence: () => true,
+  })
+  wrapped.tools.register({
+    name: 'vision_describe',
+    async execute() {
+      await assert.rejects(async () => {
+        for await (const _chunk of wrapped.llm.stream({ provider: 'doubao', model: 'seed', messages: [] })) {}
+      }, (error) => error?.code === 'INVALID_REQUEST')
+      return wrapped.llm.registration('doubao').adapter.config !== undefined
+    },
+  })
+  assert.equal(await fixture.getRegistered().execute(), false)
+})
+
+test('synchronous pre-wire UNKNOWN_MODEL receives the same evidence policy', async () => {
+  const failure = unknownModel('doubao', 'seed-live-only')
+  const fixture = fakeContext(() => {
+    throw Object.assign(new Error(failure.message), failure)
+  })
+  const wrapped = contextWithVisionExecutionPolicy(fixture.ctx, {
+    isBridgeEvidence: () => true,
+  })
+  wrapped.tools.register({
+    name: 'vision_describe',
+    async execute() {
+      await assert.rejects(async () => {
+        for await (const _chunk of wrapped.llm.stream({ provider: 'doubao', model: 'seed-live-only', messages: [] })) {}
+      }, (error) => error?.code === 'UNKNOWN_MODEL')
+      return wrapped.llm.registration('doubao').adapter.config !== undefined
+    },
+  })
+  assert.equal(await fixture.getRegistered().execute(), true)
 })
 
 test('policy state is isolated to vision tool execution and reset by the next adapter attempt', async () => {
